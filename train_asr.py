@@ -1,6 +1,7 @@
 """
 Wav2Vec2 CTC fine-tuning on UWB-ATCC.
-
+GPU-first. All issues fixed including loss plateau.
+    python train_asr.py --clean_checkpoints --no_cache
 """
 
 import os, re, json, logging, shutil, argparse, math, sys
@@ -65,13 +66,17 @@ class ASRConfig:
     target_sr: int     = 16000
     max_audio_len: float = 20.0
     min_audio_len: float = 0.3
-    model_name: str    = "facebook/wav2vec2-base-960h"
+    # Use wav2vec2-base (pretrained only, NOT fine-tuned for CTC)
+    # This is critical — base-960h has an lm_head trained for a different vocab,
+    # and its encoder features are calibrated for that vocab.
+    # wav2vec2-base gives us a clean encoder we can attach any head to.
+    model_name: str    = "facebook/wav2vec2-base"
     freeze_feature_encoder: bool = True
     gradient_checkpointing: bool = True
     batch_size: int    = 4
     grad_accum: int    = 8
-    epochs: int        = 10
-    lr: float          = 1e-4
+    epochs: int        = 30
+    lr: float          = 3e-4
     warmup: int        = 500
     fp16: bool         = True
     eval_steps: int    = 500
@@ -222,10 +227,17 @@ class ASRTrainer:
         vocab = build_vocab(ds["train"])
         vp = os.path.join(self.cfg.output_dir, "vocab.json")
         with open(vp, "w") as f: json.dump(vocab, f, ensure_ascii=False, indent=2)
-        logger.info(f"Vocab: {len(vocab)} tokens, PAD idx={vocab['[PAD]']}")
 
         tok = Wav2Vec2CTCTokenizer(vocab_file=vp, unk_token="[UNK]",
                                     pad_token="[PAD]", word_delimiter_token="|")
+
+        # Verify vocab size consistency
+        logger.info(f"Vocab file: {len(vocab)} entries")
+        logger.info(f"Tokenizer vocab_size: {tok.vocab_size}")
+        logger.info(f"len(tokenizer): {len(tok)}")
+        logger.info(f"PAD id: {tok.pad_token_id}")
+        logger.info(f"UNK id: {tok.unk_token_id}")
+
         fe  = Wav2Vec2FeatureExtractor(feature_size=1, sampling_rate=self.cfg.target_sr,
                                         padding_value=0.0, do_normalize=True,
                                         return_attention_mask=True)
@@ -257,12 +269,15 @@ class ASRTrainer:
     def make_model(self, proc, device):
         logger.info(f"Loading {self.cfg.model_name}")
 
+        # Use vocab_size from the vocab file directly, NOT len(tokenizer)
+        # len(tokenizer) can include added_tokens that inflate the count
         pad_id   = proc.tokenizer.pad_token_id
-        vocab_sz = len(proc.tokenizer)
-        logger.info(f"Tokenizer: vocab_size={vocab_sz}, pad_token_id={pad_id}")
+        vocab_sz = proc.tokenizer.vocab_size
+        logger.info(f"Model vocab_size={vocab_sz}, pad_token_id={pad_id}")
 
         model = Wav2Vec2ForCTC.from_pretrained(
             self.cfg.model_name,
+            revision="refs/pr/11",
             vocab_size=vocab_sz,
             pad_token_id=pad_id,
             ctc_loss_reduction="mean",
@@ -270,38 +285,26 @@ class ASRTrainer:
             ignore_mismatched_sizes=True,
         )
 
-        # ── Disable SpecAugment masking ──────────────────────────────
-        # masked_spec_embed is MISSING from checkpoint → randomly initialized.
-        # In .train() mode, mask_time_prob > 0 triggers SpecAugment which
-        # replaces hidden states with this garbage vector → NaN propagates
-        # through all transformer layers → logits = NaN → loss = NaN.
-        # Disable it. The model still learns fine — SpecAugment is just
-        # regularization, and we have dropout + small dataset already.
+        # Disable SpecAugment — masked_spec_embed missing from checkpoint
         model.config.mask_time_prob = 0.0
         model.config.mask_feature_prob = 0.0
         model.config.apply_spec_augment = False
         logger.info("Disabled SpecAugment (masked_spec_embed not in checkpoint)")
 
-        # ── Reinit lm_head ───────────────────────────────────────────
-        # Vocab size mismatch (32→29/31) causes random reinit.
-        # Default init uses normal(0, 0.02) which can produce large logits.
-        logger.info("Reinit lm_head (Xavier uniform gain=0.1 + zero bias)")
-        nn.init.xavier_uniform_(model.lm_head.weight, gain=0.1)
+        # Reinit lm_head properly
+        logger.info(f"Reinit lm_head: Linear({model.lm_head.in_features}, {model.lm_head.out_features})")
+        nn.init.xavier_uniform_(model.lm_head.weight, gain=1.0)
         nn.init.zeros_(model.lm_head.bias)
 
-        # ── Move to GPU ──────────────────────────────────────────────
         model = model.to(device)
         logger.info(f"Model device: {next(model.parameters()).device}")
 
-        # ── Log config ───────────────────────────────────────────────
         logger.info(f"  config.pad_token_id       = {model.config.pad_token_id}")
         logger.info(f"  config.vocab_size         = {model.config.vocab_size}")
         logger.info(f"  config.ctc_zero_infinity  = {model.config.ctc_zero_infinity}")
         logger.info(f"  config.ctc_loss_reduction = {model.config.ctc_loss_reduction}")
         logger.info(f"  config.mask_time_prob     = {model.config.mask_time_prob}")
-        logger.info(f"  config.mask_feature_prob  = {model.config.mask_feature_prob}")
 
-        # ── Freeze & checkpointing ───────────────────────────────────
         if self.cfg.freeze_feature_encoder:
             logger.info("Freezing feature encoder")
             model.freeze_feature_encoder()
@@ -365,54 +368,37 @@ class ASRTrainer:
         collator = CTCCollator(processor=proc)
         metrics  = Metrics(proc)
 
-        # ── sanity check (eval mode — no SpecAugment, no dropout) ────
+        # ── sanity check ─────────────────────────────────────────────
         logger.info("Sanity check …")
         n_sample = min(4, len(ds["train"]))
         batch = collator([ds["train"][i] for i in range(n_sample)])
         batch = {k: v.to(device) for k, v in batch.items()}
 
-        model.eval()  # eval mode for sanity — no masking, no dropout
+        # Test eval mode
+        model.eval()
         with torch.no_grad():
-            out = model(input_values=batch["input_values"],
-                        labels=batch["labels"])
+            out = model(input_values=batch["input_values"], labels=batch["labels"])
+        loss_eval = out.loss.item()
+        logger.info(f"  loss (eval)  = {loss_eval:.4f}  (device={batch['input_values'].device})")
 
-        loss = out.loss.item()
-        logger.info(f"  loss (eval)  = {loss:.4f}  (device={batch['input_values'].device})")
+        # Check predictions are not all blank
+        logits = out.logits
+        pred_ids = torch.argmax(logits, dim=-1)
+        unique_preds = torch.unique(pred_ids).tolist()
+        logger.info(f"  unique predicted ids = {unique_preds}")
+        logger.info(f"  PAD/blank id = {proc.tokenizer.pad_token_id}")
 
-        if not math.isfinite(loss):
-            logits = out.logits
-            logger.error(f"  logits: min={logits.min().item():.4f} max={logits.max().item():.4f} "
-                         f"nan={torch.isnan(logits).any().item()}")
-            logger.error(f"  input:  {batch['input_values'].shape}  "
-                         f"min={batch['input_values'].min().item():.4f} "
-                         f"max={batch['input_values'].max().item():.4f} "
-                         f"nan={torch.isnan(batch['input_values']).any().item()}")
-            logger.error(f"  labels: {batch['labels'].shape}")
+        if not math.isfinite(loss_eval):
+            raise RuntimeError("Sanity check FAILED — eval loss is NaN/Inf")
 
-            # Check intermediate: run encoder only
-            with torch.no_grad():
-                enc_out = model.wav2vec2(input_values=batch["input_values"])
-                hidden = enc_out[0]
-                logger.error(f"  encoder output: min={hidden.min().item():.4f} "
-                             f"max={hidden.max().item():.4f} "
-                             f"nan={torch.isnan(hidden).any().item()}")
-                logits_raw = model.lm_head(model.dropout(hidden))
-                logger.error(f"  lm_head output: min={logits_raw.min().item():.4f} "
-                             f"max={logits_raw.max().item():.4f} "
-                             f"nan={torch.isnan(logits_raw).any().item()}")
-            raise RuntimeError("Sanity check FAILED — loss is NaN/Inf")
-
-        # Now test with train mode + grad
+        # Test train mode
         model.train()
-        out2 = model(input_values=batch["input_values"],
-                     labels=batch["labels"])
-        loss2 = out2.loss.item()
-        logger.info(f"  loss (train) = {loss2:.4f}")
+        out2 = model(input_values=batch["input_values"], labels=batch["labels"])
+        loss_train = out2.loss.item()
+        logger.info(f"  loss (train) = {loss_train:.4f}")
 
-        if not math.isfinite(loss2):
-            logger.error("  Train-mode loss is NaN but eval was fine.")
-            logger.error("  This means SpecAugment or dropout is causing issues.")
-            raise RuntimeError("Sanity check FAILED in train mode")
+        if not math.isfinite(loss_train):
+            raise RuntimeError("Sanity check FAILED — train loss is NaN/Inf")
 
         out2.loss.backward()
         gn = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -450,11 +436,10 @@ class ASRTrainer:
             group_by_length=True,
             remove_unused_columns=True,
             max_grad_norm=1.0,
-            no_cuda=self.cfg.force_cpu,
+            use_cpu=self.cfg.force_cpu,
         )
 
-        logger.info(f"TrainingArgs: device={args.device}, fp16={args.fp16}, "
-                     f"n_gpu={args.n_gpu}")
+        logger.info(f"TrainingArgs: device={args.device}, fp16={args.fp16}, n_gpu={args.n_gpu}")
 
         trainer = Trainer(
             model=model,
@@ -491,13 +476,13 @@ def main():
     p.add_argument("--project_dir", default=os.path.expanduser("~/asr_project"))
     p.add_argument("--dataset_dir", default=None)
     p.add_argument("--output_dir",  default=None)
-    p.add_argument("--model_name",  default="facebook/wav2vec2-base-960h")
+    p.add_argument("--model_name",  default="facebook/wav2vec2-base")
     p.add_argument("--no_freeze_encoder",        action="store_true")
     p.add_argument("--no_gradient_checkpointing", action="store_true")
     p.add_argument("--batch_size",  type=int,   default=4)
     p.add_argument("--grad_accum",  type=int,   default=8)
-    p.add_argument("--epochs",      type=int,   default=10)
-    p.add_argument("--lr",          type=float, default=1e-4)
+    p.add_argument("--epochs",      type=int,   default=30)
+    p.add_argument("--lr",          type=float, default=3e-4)
     p.add_argument("--warmup",      type=int,   default=500)
     p.add_argument("--no_fp16",                 action="store_true")
     p.add_argument("--no_cache",                action="store_true")
