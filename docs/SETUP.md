@@ -29,6 +29,6 @@ export PYTHONPATH=$PYTHONPATH:$(pwd)
 export PATH=$HOME/bin:$PATH
 
 ## Known Issues
-- Default conda channel pulls GraalPy instead of CPython. Always use -c conda-forge.
-- requirements.txt has a typo: pyctcdecode=0.4.0 should be pyctcdecode==0.4.0
+- Default conda channel pulls GraalPy instead of CPython. Always use -c conda-forge
+- requirements.txt has typo: pyctcdecode=0.4.0 should be pyctcdecode==0.4.0
 - uconv not available without sudo; use the Python wrapper in scripts/
