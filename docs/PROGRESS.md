@@ -16,7 +16,7 @@
   - Train: 11,543 utterances
   - Test: 2,886 utterances
 
-## Phase 3a - Baseline Run: wav2vec2-base [DONE]
+## Phase 3a - Pipeline Validation: wav2vec2-base, 3k steps [DONE]
 ### Model
 - Model: facebook/wav2vec2-base (95M parameters)
 - Pretrained on: LibriSpeech 960h
@@ -32,61 +32,96 @@
 - Feature encoder: frozen
 - GPUs: 4x NVIDIA RTX 2080 Ti (11GB each)
 
+### Command
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 bash src/run_asr_fine_tuning.sh \
+  --cmd "none" \
+  --model-name-or-path "facebook/wav2vec2-base" \
+  --dataset-name "experiments/data/uwb_atcc/train" \
+  --eval-dataset-name "experiments/data/uwb_atcc/test" \
+  --max-steps 3000 \
+  --per-device-train-batch-size 12 \
+  --gradient-acc 3 \
+  --learning_rate "1e-4" \
+  --mask-time-prob "0.0" \
+  --overwrite-dir "true" \
+  --exp "experiments/results"
+```
+
 ### Results
 - Train loss: 1.3919
 - Eval WER: 79.46%
 - Runtime: 14h 42min
 
 ### Analysis
-- WER of 79.46% is high due to:
-  1. Base model has weaker speech representations vs large model
-  2. Only 3,000 steps (insufficient for domain adaptation)
-  3. No language model (LM) used during decoding
-  4. Smaller effective batch size than paper (36 vs 64)
-- This run served as a pipeline validation — confirmed full training loop works end to end
+- High WER expected: only 3k steps, no LM, base model, smaller batch than paper
+- Purpose: validate full pipeline end-to-end — confirmed working
 
-## Phase 3b - Full Replication: wav2vec2-base [IN PROGRESS]
+## Phase 3b - Base Model Full Run: wav2vec2-base, 10k steps [DONE]
 ### Model
 - Model: facebook/wav2vec2-base (95M parameters)
-- Same architecture as Phase 3a but with paper's exact hyperparameters
+- Same as 3a but with repo's exact hyperparameters from ablations/uwb_atcc/train_w2v2_base.sh
 
-### Hyperparameters (matching repo's ablations/uwb_atcc/train_w2v2_base.sh)
+### Hyperparameters
 - Steps: 10,000
 - Per device batch size: 16
-- Gradient accumulation: 2 (effective batch = 32)
+- Gradient accumulation: 2 (effective batch = 128 across 4 GPUs)
 - Learning rate: 1e-4
 - mask_time_prob: 0.01
+- Warmup steps: 1,000
 - fp16: enabled
 - Feature encoder: frozen
 - GPUs: 4x NVIDIA RTX 2080 Ti (11GB each)
 
-### Expected Results (from paper)
-- Target WER: ~21% (with LM), ~25-30% (without LM)
-- Currently training — results to be updated on completion
+### Command
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 bash ablations/uwb_atcc/train_w2v2_base.sh
+```
 
-## Phase 4 - Large Model Replication [PENDING]
+### Results
+- Eval WER: 60.70% (no LM)
+- Eval loss: 2.5709
+- Runtime: ~48h
+
+### Analysis
+- WER improved from 79.46% → 60.70% with proper step count
+- Still higher than paper's ~21% because base model lacks self-training pretraining
+- Paper uses wav2vec2-large-960h-lv60-self which was pretrained on 60k hours with self-training
+
+## Phase 4 - Large Model Replication: wav2vec2-large-960h-lv60-self [IN PROGRESS]
+### Model
 - Model: facebook/wav2vec2-large-960h-lv60-self (317M parameters)
-- Script: ablations/uwb_atcc/train_w2v2_large-60v.sh
+- This is the **exact model used in the paper** (Table 3, UWB-ATCC results)
+- Pretrained on: LibriSpeech 960h + 60,000h unlabeled audio via self-training (Libri-Light)
+- Self-training makes it significantly more robust than the base model for domain shift
+
+### Why this model
+- Wav2Vec 2.0 Large uses a deeper transformer (24 layers vs 12 in base)
+- Self-training on 60k hours gives it much stronger generalization to unseen domains like ATC
+- The paper reports 20-40% relative WER reduction over hybrid ASR baselines using this model
+
+### Hyperparameters (from ablations/uwb_atcc/train_w2v2_large-60v.sh)
 - Steps: 10,000
-- Expected WER: ~17.48% (with LM), ~21% (without LM)
+- Per device batch size: 16
+- Gradient accumulation: 2 (effective batch = 128 across 4 GPUs)
+- Learning rate: 5e-4
+- mask_time_prob: 0.01
+- Warmup steps: 1,000
+- fp16: enabled
+- Feature encoder: frozen
+- GPUs: 4x NVIDIA RTX 2080 Ti (11GB each)
+
+### Command
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 bash ablations/uwb_atcc/train_w2v2_large-60v.sh
+```
+
+### Expected Results (from paper, Table 3)
+- Target WER without LM: ~21%
+- Target WER with 4-gram LM: ~17.48%
+- Currently training — results to be updated on completion
 
 ## Phase 5 - Evaluation with Language Model [PENDING]
 - Train 4-gram KenLM on UWB-ATCC training transcripts
 - Evaluate fine-tuned models with LM decoding
 - Expected WER improvement: ~3-5% absolute
-
-## Phase 3b - Full Replication: wav2vec2-base [DONE]
-### Results
-- Train completed: 10,000 steps
-- Eval WER: 60.70% (no LM)
-- Eval loss: 2.5709
-- Epoch: 111.11
-- Eval samples: 2,885
-
-### Analysis
-- WER improved from 79.46% (3k steps) to 60.70% (10k steps)
-- Still higher than paper's ~21% WER because:
-  1. Base model vs large model (paper uses wav2vec2-large-960h-lv60-self)
-  2. No language model used during decoding
-  3. Large model has self-training pretraining on 60k hours
-- Next: run large model replication to match paper results
