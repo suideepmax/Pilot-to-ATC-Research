@@ -74,3 +74,19 @@
 - Train 4-gram KenLM on UWB-ATCC training transcripts
 - Evaluate fine-tuned models with LM decoding
 - Expected WER improvement: ~3-5% absolute
+
+## Phase 3b - Full Replication: wav2vec2-base [DONE]
+### Results
+- Train completed: 10,000 steps
+- Eval WER: 60.70% (no LM)
+- Eval loss: 2.5709
+- Epoch: 111.11
+- Eval samples: 2,885
+
+### Analysis
+- WER improved from 79.46% (3k steps) to 60.70% (10k steps)
+- Still higher than paper's ~21% WER because:
+  1. Base model vs large model (paper uses wav2vec2-large-960h-lv60-self)
+  2. No language model used during decoding
+  3. Large model has self-training pretraining on 60k hours
+- Next: run large model replication to match paper results
