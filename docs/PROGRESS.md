@@ -125,3 +125,10 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 bash ablations/uwb_atcc/train_w2v2_large-60v.sh
 - Train 4-gram KenLM on UWB-ATCC training transcripts
 - Evaluate fine-tuned models with LM decoding
 - Expected WER improvement: ~3-5% absolute
+
+## Phase 4 Update - Large Model Training Issue
+- DDP (torchrun) worked and reached step 1300/10000
+- Training crashed at step 1300 due to vocab size mismatch (label values > vocab_size: 32)
+- Crash corrupted CUDA driver state on GPU 1 — machine reboot required
+- Checkpoint saved at step 1000 — will resume from there after reboot
+- Resume command: torchrun with --resume_from_checkpoint=checkpoint-1000
