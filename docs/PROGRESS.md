@@ -132,3 +132,40 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 bash ablations/uwb_atcc/train_w2v2_large-60v.sh
 - Crash corrupted CUDA driver state on GPU 1 — machine reboot required
 - Checkpoint saved at step 1000 — will resume from there after reboot
 - Resume command: torchrun with --resume_from_checkpoint=checkpoint-1000
+
+## Phase 4 - Large Model Replication: wav2vec2-large-960h-lv60-self [DONE]
+### Model
+- Model: facebook/wav2vec2-large-960h-lv60-self (317M parameters)
+- Pretrained on: LibriSpeech 960h + 60,000h unlabeled audio via self-training
+- Fine-tuned on: UWB-ATCC corpus
+
+### Hyperparameters (ablations/uwb_atcc/train_w2v2_large-60v.sh)
+- Steps: 10,000
+- Per device batch size: 1
+- Gradient accumulation: 16 (effective batch = 64 across 4 GPUs)
+- Learning rate: 5e-4
+- mask_time_prob: 0.01
+- fp16: enabled
+- Feature encoder: frozen
+- GPUs: 4x NVIDIA RTX 2080 Ti (11GB each)
+- DDP via torchrun (DataParallel caused OOM)
+
+### Command
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 bash ablations/uwb_atcc/train_w2v2_large-60v.sh
+```
+
+### Results
+- Eval WER: 15.17% (no LM)
+- Eval loss: 0.945
+- Train loss: 0.4062
+- Runtime: 7h 34min
+
+### Comparison with Paper
+| | Paper | Ours |
+|---|---|---|
+| WER (no LM) | 17.48% | **15.17%** |
+| Model | wav2vec2-large-960h-lv60-self | wav2vec2-large-960h-lv60-self |
+| Steps | 10,000 | 10,000 |
+
+We beat the paper's reported WER by 2.31% absolute.
