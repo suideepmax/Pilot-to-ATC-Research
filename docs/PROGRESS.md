@@ -190,3 +190,30 @@ Both runs beat the paper's reported WER consistently.
 - Command: `bash src/run_train_kenlm.sh`
 - Output: `experiments/data/uwb_atcc/train/lm/uwb_atcc_4g.binary`
 - Expected WER improvement after LM fusion: ~3-5% absolute
+
+## Phase 5 - KenLM Language Model + Evaluation [DONE]
+### KenLM Training
+- Type: 4-gram language model
+- Trained on: UWB-ATCC training transcripts
+- Command: `bash src/run_train_kenlm.sh`
+- Output: `experiments/data/uwb_atcc/train/lm/uwb_atcc_4g.binary`
+
+### Final Evaluation Results
+| Metric | Paper | Ours |
+|---|---|---|
+| WER without LM | 17.48% | **14.54%** |
+| WER with CTC+LM | 14.26% | **12.69%** |
+
+We beat the paper on both metrics.
+
+### Evaluation Command
+```bash
+MODEL_FOLDER="experiments/results/baselines/wav2vec2-large-960h-lv60-self/uwb_atcc/0.0ld_0.0ad_0.0attd_0.0fpd_0.01mtp_12mtl_0.0mfp_12mfl_16acc"
+LM_FOLDER="experiments/data/uwb_atcc/train/lm/uwb_atcc_4g.binary"
+
+python3 src/eval_model.py \
+  --pretrained-model "$MODEL_FOLDER" \
+  --language-model "$LM_FOLDER" \
+  --print-output "true" \
+  --test-set "experiments/data/uwb_atcc/test"
+```
