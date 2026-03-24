@@ -29,7 +29,7 @@ unzip -o "$ZIP_PATH" -d data/databases/uwb_atcc/
 
 # Step 2 - Extract rar
 echo "[2/6] Extracting rar..."
-bsdtar -xf data/databases/uwb_atcc/ZCU_CZ_ATC.rar -C data/databases/uwb_atcc/
+/home/kotasthane/miniconda3/bin/bsdtar -xf data/databases/uwb_atcc/ZCU_CZ_ATC.rar -C data/databases/uwb_atcc/
 
 # Step 3 - Organize into audio/transcripts
 echo "[3/6] Organizing files..."
@@ -130,7 +130,6 @@ python3 data/utils/gen_train_test.py \
   --train-percentage 80 \
   --input-csv $data/ids
 
-mkdir -p $data/train $data/test
 for ds in train test; do
   files_to_filter="text segments utt2spk utt2speakerid"
   for file_to_filter in $files_to_filter; do

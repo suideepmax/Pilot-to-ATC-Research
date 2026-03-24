@@ -169,3 +169,24 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 bash ablations/uwb_atcc/train_w2v2_large-60v.sh
 | Steps | 10,000 | 10,000 |
 
 We beat the paper's reported WER by 2.31% absolute.
+
+## Phase 4 - Large Model Replication: wav2vec2-large-960h-lv60-self [DONE - RUN 2]
+### Results (confirmed consistent across runs)
+- Eval WER: 15.15% (no LM)
+- Eval loss: 0.9479
+- Train loss: 0.4076
+- Runtime: 8h 35min
+- Note: Model was retrained after repo wipe — results consistent with Run 1 (15.17%)
+
+### Comparison with Paper
+| | Paper | Ours (Run 1) | Ours (Run 2) |
+|---|---|---|---|
+| WER (no LM) | 17.48% | 15.17% | **15.15%** |
+
+Both runs beat the paper's reported WER consistently.
+
+## Phase 5 - KenLM Language Model Training [IN PROGRESS]
+- Training 4-gram KenLM on UWB-ATCC training transcripts
+- Command: `bash src/run_train_kenlm.sh`
+- Output: `experiments/data/uwb_atcc/train/lm/uwb_atcc_4g.binary`
+- Expected WER improvement after LM fusion: ~3-5% absolute
