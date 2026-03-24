@@ -135,7 +135,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 bash ablations/uwb_atcc/train_w2v2_large-60v.sh
 ```
 
 ### Results (confirmed across 2 runs)
-- Eval WER: 15.15% (no LM)
+- Eval WER: 15.15% (no LM, greedy decoding during training)
+- Eval WER: 14.54% (no LM, beam search via eval_model.py — use this for comparison)
 - Eval loss: 0.945
 - Train loss: 0.407
 - Runtime: ~8h on 4x RTX 2080 Ti
