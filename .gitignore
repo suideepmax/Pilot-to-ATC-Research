@@ -1,4 +1,3 @@
-# Data files (too large for GitHub)
 *.wav
 *.mp3
 *.flac
@@ -6,20 +5,14 @@
 *.ckpt
 *.pt
 *.bin
-
-# Python
+*.safetensors
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
-
-# Conda
 *.egg-info/
-
-# OS
 .DS_Store
 Thumbs.db
-
-# Logs
 *.log
 wandb/
 lightning_logs/
+*.distcp
