@@ -53,3 +53,20 @@
 - ModelParallelStrategy does not support 16-mixed -> use 16-true
 - DDP OOM with 2.5B model on 11GB GPUs -> use FSDP (ModelParallelStrategy)
 - "Too many open files" crash at ~step 407 -> ulimit -n 65536 + num_workers=1
+
+## Learning Curve (WER vs Training Steps)
+Evaluated on 500 test samples at each checkpoint.
+
+| Step | WER |
+|------|-----|
+| 0 (zero-shot) | 81.49% |
+| 500 | 39.14% |
+| 1,000 | 45.02% |
+| 2,000 | 30.87% |
+| 3,000 | 26.28% |
+| 5,000 | 24.77% |
+| 7,500 | 24.53% |
+| 10,000 | 24.53% |
+
+Model converges rapidly — reaches within 2% of final WER by step 3,000 (30% of training).
+Plateaus at ~24.5% WER from step 5,000 onwards.
