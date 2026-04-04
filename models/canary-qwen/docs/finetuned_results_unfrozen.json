@@ -1,0 +1,8 @@
+{
+  "wer": 0.2382177402757769,
+  "params_trained_pct": 32.8,
+  "val_loss_best": 0.649,
+  "baseline_wer": 0.8149,
+  "lora_only_wer": 0.2332,
+  "w2v2_wer": 0.1454
+}
