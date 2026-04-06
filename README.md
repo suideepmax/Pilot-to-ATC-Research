@@ -16,6 +16,7 @@ Comparative evaluation of end-to-end (Wav2Vec2) and hybrid (Canary-Qwen-2.5B) AS
 - **Framework**: NVIDIA NeMo (speechlm2)
 - **WER**: 23.32% (fine-tuned) / 81.49% (zero-shot)
 - See: `models/canary-qwen/`
+- **HuggingFace**: [suideepmax/canary-qwen-2.5b-atc-lora](https://huggingface.co/suideepmax/canary-qwen-2.5b-atc-lora)
 
 ## Dataset
 - **UWB-ATCC**: Air Traffic Control Communications corpus
