@@ -52,7 +52,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 bash src/run_asr_fine_tuning.sh \
 
 ### Results
 - Train loss: 1.3919
-- Eval WER: 79.46%
+- Eval WER: 79.46% (greedy decoding)
 - Runtime: 14h 42min
 
 ### Analysis
@@ -81,21 +81,21 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 bash ablations/uwb_atcc/train_w2v2_base.sh
 ```
 
 ### Results
-- Eval WER: 60.70% (no LM)
+- Eval WER: 60.70% (greedy decoding, no LM)
 - Eval loss: 2.5709
 - Runtime: ~48h
 
 ### Analysis
 - WER improved from 79.46% → 60.70% with proper step count
 - Still higher than paper's ~21% because base model lacks self-training pretraining
-- Paper uses wav2vec2-large-960h-lv60-self which was pretrained on 60k hours with self-training
+- Paper uses wav2vec2-large-960h-lv60-self pretrained on 60k hours with self-training
 
 ## Phase 4 - Large Model Replication: wav2vec2-large-960h-lv60-self [DONE]
 ### Model
 - Model: facebook/wav2vec2-large-960h-lv60-self (317M parameters)
-- This is the **exact model used in the paper** (Table 3, UWB-ATCC results)
+- Exact model used in the paper (Table 3, UWB-ATCC results)
 - Pretrained on: LibriSpeech 960h + 60,000h unlabeled audio via self-training (Libri-Light)
-- Architecture: 24 transformer layers (vs 12 in base), self-training gives stronger domain generalization
+- Architecture: 24 transformer layers vs 12 in base, self-training gives stronger domain generalization
 
 ### Hyperparameters
 - Steps: 10,000
@@ -104,10 +104,10 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 bash ablations/uwb_atcc/train_w2v2_base.sh
 - Learning rate: 5e-4
 - mask_time_prob: 0.01
 - Warmup steps: 1,000
-- fp16: enabled
+- fp16: enabled, fp16_full_eval: disabled (prevents CUBLAS crash on RTX 2080 Ti)
 - Feature encoder: frozen
 - GPUs: 4x NVIDIA RTX 2080 Ti (11GB each)
-- Multi-GPU: DDP via torchrun (DataParallel caused OOM due to full model copy per GPU)
+- Multi-GPU: DDP via torchrun (DataParallel caused OOM — full model copy per GPU)
 
 ### Script Modifications Required
 The original repo uses `python3` in `src/run_asr_fine_tuning.sh` which triggers DataParallel (DP). DP copies the full 317M model to every GPU during gradient sync causing OOM on 11GB VRAM. Fix: replace with `torchrun` for DDP.
@@ -124,7 +124,10 @@ sed -i '/^  $/d' src/run_asr_fine_tuning.sh
 # 4. Re-add --gradient_checkpointing in correct position
 sed -i '/--mask_feature_length=$mask_feature_length \\/a\  --gradient_checkpointing \\' src/run_asr_fine_tuning.sh
 
-# 5. Reduce batch size in ablations/uwb_atcc/train_w2v2_large-60v.sh
+# 5. Disable fp16 eval to prevent CUBLAS crash on RTX 2080 Ti
+sed -i 's/--fp16 \\/--fp16 \\\n  --fp16_full_eval=False \\/' src/run_asr_fine_tuning.sh
+
+# 6. Reduce batch size in ablations/uwb_atcc/train_w2v2_large-60v.sh
 sed -i 's/per_device_train_batch_size=16/per_device_train_batch_size=1/' ablations/uwb_atcc/train_w2v2_large-60v.sh
 sed -i 's/gradient_acc=2/gradient_acc=16/' ablations/uwb_atcc/train_w2v2_large-60v.sh
 ```
@@ -134,14 +137,31 @@ sed -i 's/gradient_acc=2/gradient_acc=16/' ablations/uwb_atcc/train_w2v2_large-6
 CUDA_VISIBLE_DEVICES=0,1,2,3 bash ablations/uwb_atcc/train_w2v2_large-60v.sh
 ```
 
-### Results (confirmed across 2 runs)
-- Eval WER: 15.15% (no LM, greedy decoding during training)
-- Eval WER: 14.54% (no LM, beam search via eval_model.py — use this for comparison)
-- Eval loss: 0.945
-- Train loss: 0.407
-- Runtime: ~8h on 4x RTX 2080 Ti
+### Results (confirmed across 3 independent runs)
+| Run | Greedy WER | Train Loss | Runtime |
+|-----|-----------|------------|---------|
+| Run 1 | 15.17% | 0.4062 | 7h 34min |
+| Run 2 | 15.15% | 0.4076 | 8h 35min |
+| Run 3 | 15.07% | 0.4077 | 7h 15min |
+| **Average** | **15.13%** | **0.407** | **~7.8h** |
 
-## Phase 5 - KenLM Language Model + Evaluation [DONE]
+Note: 15.07% is greedy decoding during training. Beam search eval gives 14.54% (see Phase 5).
+
+### Learning Curve (Run 3)
+| Step | Eval WER | Train Loss |
+|------|----------|------------|
+| 500 | 27.99% | - |
+| 1000 | 20.50% | 1.9717 |
+| 2000 | 18.98% | 0.6024 |
+| 3000 | 17.26% | 0.4164 |
+| 5000 | 16.39% | 0.2305 |
+| 7000 | 15.80% | 0.1333 |
+| 9000 | 15.05% | 0.0760 |
+| 10000 | 15.07% | 0.0606 |
+
+Model crosses paper's 17.48% WER baseline at approximately step 2,500.
+
+## Phase 5 - KenLM Language Model + Final Evaluation [DONE]
 ### KenLM Training
 - Type: 4-gram language model
 - Toolkit: KenLM (built from source at ~/kenlm)
@@ -149,7 +169,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 bash ablations/uwb_atcc/train_w2v2_large-60v.sh
 - Command: `bash src/run_train_kenlm.sh`
 - Output: `experiments/data/uwb_atcc/train/lm/uwb_atcc_4g.binary`
 
-### KenLM Build Requirements (no sudo)
+### KenLM Build (no sudo)
 ```bash
 conda install -c conda-forge cmake boost-cpp -y
 cd ~/kenlm && mkdir build && cd build
@@ -161,20 +181,13 @@ export LD_LIBRARY_PATH=$HOME/miniconda3/pkgs/libboost-1.82.0-h6fcfa73_3/lib:$LD_
 
 ### Evaluation Command
 ```bash
-MODEL_FOLDER="experiments/results/baselines/wav2vec2-large-960h-lv60-self/uwb_atcc/0.0ld_0.0ad_0.0attd_0.0fpd_0.01mtp_12mtl_0.0mfp_12mfl_16acc"
-LM_FOLDER="experiments/data/uwb_atcc/train/lm/uwb_atcc_4g.binary"
-
-python3 src/eval_model.py \
-  --pretrained-model "$MODEL_FOLDER" \
-  --language-model "$LM_FOLDER" \
-  --print-output "true" \
-  --test-set "experiments/data/uwb_atcc/test"
+bash models/w2v2/scripts/eval_large_model.sh
 ```
 
-### Final Results vs Paper
-| Metric | Paper | Ours |
-|---|---|---|
-| WER without LM | 17.48% | **14.54%** |
-| WER with CTC+LM | 14.26% | **12.69%** |
+### Final Results vs Paper (confirmed across 2 eval runs)
+| Metric | Paper | Our Run 1 | Our Run 2 | Average |
+|--------|-------|-----------|-----------|---------|
+| WER no LM (beam search) | 17.48% | 14.54% | 14.60% | **14.57%** |
+| WER with CTC+LM | 14.26% | 12.69% | 12.82% | **12.76%** |
 
-We beat the paper on both metrics. Replication complete.
+We beat the paper on both metrics consistently across all runs.
