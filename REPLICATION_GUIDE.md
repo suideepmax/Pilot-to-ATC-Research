@@ -239,7 +239,7 @@ Expected: LoRA = 23.32% WER | Encoder unfrozen = 23.82% WER
 
 ---
 
-## Part 4: Results Summary
+## Part 4: Results Summary (UWB-ATCC)
 
 | Model | Params Trained | WER | Time |
 |---|---|---|---|
@@ -255,3 +255,51 @@ HuggingFace models:
 - W2V2: https://huggingface.co/suideepmax/wav2vec2-large-960h-lv60-self-atc-uwb-atcc
 - Canary LoRA: https://huggingface.co/suideepmax/canary-qwen-2.5b-atc-lora
 - Canary Unfrozen: https://huggingface.co/suideepmax/canary-qwen-2.5b-atc-unfrozen
+
+---
+
+## Part 5: ATCOSIM Corpus — Wav2Vec2 Large
+
+**Prerequisites:** Complete Part 1 (W2V2 environment setup) first.
+
+### 5.1 Prepare ATCOSIM Data
+
+```bash
+cd ~/w2v2-air-traffic
+bash ~/Pilot-to-ATC-Research/models/w2v2/scripts/data_prepare_atcosim.sh
+```
+
+This downloads the ATCOSIM ISO (~2.5GB), extracts it with `bsdtar`, and runs the full
+normalization + train/test split pipeline. Output:
+- `experiments/data/atcosim_corpus/{train,test}/`
+- Gender subsets: `{train,test}_{female,male}/`
+
+### 5.2 Apply the Same Script Modifications as UWB-ATCC
+
+The same DDP/batch-size fixes from Part 1.4 apply. If you already ran the UWB-ATCC
+training, these changes are already in place in `src/run_asr_fine_tuning.sh` and
+`ablations/atcosim/train_w2v2_large-60v.sh`.
+
+```bash
+# Reduce batch size to fit 317M model on 11GB VRAM
+sed -i 's/per_device_train_batch_size=16/per_device_train_batch_size=1/' ablations/atcosim/train_w2v2_large-60v.sh
+sed -i 's/gradient_acc=2/gradient_acc=16/' ablations/atcosim/train_w2v2_large-60v.sh
+```
+
+### 5.3 Train
+
+```bash
+cd ~/w2v2-air-traffic
+export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+export PYTHONPATH=$PYTHONPATH:$(pwd)
+export PATH=$HOME/bin:$PATH
+
+CUDA_VISIBLE_DEVICES=0,1,2,3 bash ~/Pilot-to-ATC-Research/models/w2v2/scripts/train_wav2vec2_atcosim_large.sh
+```
+
+- Steps: 5,000 | LR: 5e-4 | Warmup: 1,000
+- Effective batch size: 64 (1/GPU x 4 GPUs x 16 grad accum)
+- Expected time: TBD
+
+### 5.4 Results
+See `models/w2v2/docs/PROGRESS_ATCOSIM.md` for results as they come in.
