@@ -1,8 +1,10 @@
 # Pilot-to-ATC Speech Recognition Research
 
-Comparing end-to-end (Wav2Vec2) and hybrid (Canary-Qwen-2.5B) ASR models for Air Traffic Control communications, fine-tuned on the UWB-ATCC corpus.
+Comparing end-to-end (Wav2Vec2) and hybrid (Canary-Qwen-2.5B) ASR models for Air Traffic Control communications, across multiple ATC corpora.
 
 ## Results
+
+### UWB-ATCC Corpus (Real ATC, Prague Airport)
 
 | Model | Params Trained | WER | Training Time |
 |---|---|---|---|
@@ -13,6 +15,15 @@ Comparing end-to-end (Wav2Vec2) and hybrid (Canary-Qwen-2.5B) ASR models for Air
 | Canary-Qwen (zero-shot) | 0 | 81.49% | N/A |
 
 All models trained for 10,000 steps with lr=5e-4, warmup=1,000, on 4x RTX 2080 Ti.
+
+### ATCOSIM Corpus (Simulated ATC, non-native speakers) — In Progress
+
+| Model | Params Trained | WER | Training Time |
+|---|---|---|---|
+| W2V2 Large (no LM) | 317M (100%) | TBD | TBD |
+| W2V2 Large (with KenLM) | 317M (100%) | TBD | TBD |
+
+See: `models/w2v2/docs/PROGRESS_ATCOSIM.md`
 
 ## Models
 
@@ -28,9 +39,16 @@ All models trained for 10,000 steps with lr=5e-4, warmup=1,000, on 4x RTX 2080 T
 - HuggingFace: [suideepmax/canary-qwen-2.5b-atc-lora](https://huggingface.co/suideepmax/canary-qwen-2.5b-atc-lora)
 - See: `models/canary-qwen/`
 
-## Dataset
-- UWB-ATCC corpus (Air Traffic Control Communications, Prague Airport)
+## Datasets
+### UWB-ATCC
+- Real ATC communications, Prague Airport (Czech controllers)
 - Train: 11,543 utterances (~10.5 hrs) / Test: 2,886 utterances (~2.6 hrs)
+- 80/20 split, seed=1234
+
+### ATCOSIM
+- Simulated ATC, non-native speakers (German/Swiss accents), 10 speakers
+- ~10 hours total, 32kHz, close-talk headset
+- Gender-based subsets available (train/test female, train/test male)
 - 80/20 split, seed=1234
 
 ## Key Findings
@@ -42,19 +60,37 @@ However, Canary-Qwen shows extreme parameter efficiency: 0.97% of parameters tra
 Adding regularization (SpecAugment, dropout, weight decay) to Canary-Qwen cut WER from 23.32% to 20.70%. The original 24% plateau was overfitting, not an architectural limit. NVIDIA's default config was calibrated for 234k hours, not 10 hours.
 
 ## Repository Structure
+```
 Pilot-to-ATC-Research/
 ├── README.md
 ├── REPLICATION_GUIDE.md
 ├── models/
 │   ├── w2v2/
 │   │   ├── docs/
+│   │   │   ├── SETUP.md
+│   │   │   ├── PROGRESS_UWB_ATCC.md
+│   │   │   ├── PROGRESS_ATCOSIM.md
+│   │   │   └── learning_curve.json
 │   │   └── scripts/
+│   │       ├── setup_environment.sh
+│   │       ├── data_prepare_uwb_atcc.sh
+│   │       ├── data_prepare_atcosim.sh
+│   │       ├── train_wav2vec2_base_initial.sh
+│   │       ├── train_wav2vec2_base_10k.sh
+│   │       ├── train_wav2vec2_large.sh
+│   │       ├── train_wav2vec2_atcosim_large.sh
+│   │       ├── train_kenlm.sh
+│   │       └── eval_large_model.sh
 │   └── canary-qwen/
 │       ├── docs/
+│       │   ├── SETUP.md
+│       │   ├── PROGRESS.md
+│       │   └── *.json (results/learning curves)
 │       └── scripts/
 └── shared/
-├── data_info.md
-└── model_comparison.md
+    ├── data_info.md        ← UWB-ATCC + ATCOSIM dataset info
+    └── model_comparison.md ← cross-model WER comparison
+```
 
 ## System
 - Ubuntu workstation (ET335Lambda)
