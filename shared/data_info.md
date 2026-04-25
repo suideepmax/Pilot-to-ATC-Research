@@ -47,8 +47,8 @@ Located at: `~/canary-ft/data/`
 - **Recording type**: Close-talk headset microphone, real-time ATC simulations
 
 ## Data Splits (seed=1234, 80/20)
-- **Train**: TBD utterances
-- **Test**: TBD utterances
+- **Train**: 7,660 utterances
+- **Test**: 1,916 utterances
 
 ## Gender Subsets
 | Split | Speakers |
