@@ -8,8 +8,8 @@
 - Extracted with `bsdtar` (no sudo needed) to `~/atcosim_data/extracted/`
 - Text normalization pipeline: local_filter (replaces ATC-specific tags), acronym linking, uconv lowercase, final_normalization.py
 - Train/test split (80/20, seed=1234):
-  - Train: TBD utterances
-  - Test: TBD utterances
+  - Train: 7,660 utterances
+  - Test: 1,916 utterances
 - Gender-based subsets also created: train_female, test_female, train_male, test_male
 - Output: `experiments/data/atcosim_corpus/{train,test,train_female,test_female,train_male,test_male}/`
 - Script: `scripts/data_prepare_atcosim.sh`
@@ -32,19 +32,20 @@
 
 ---
 
-## Phase 2 - Large Model Training: wav2vec2-large-960h-lv60-self [ ]
+## Phase 2 - Large Model Training: wav2vec2-large-960h-lv60-self [DONE]
 
 ### Model
 - Model: facebook/wav2vec2-large-960h-lv60-self (317M parameters)
 - Same model used for UWB-ATCC replication (Phase 4 in PROGRESS_UWB_ATCC.md)
 - Pretrained on: LibriSpeech 960h + 60,000h unlabeled audio via self-training
 
-### Planned Hyperparameters (from `ablations/atcosim/train_w2v2_large-60v.sh`)
+### Hyperparameters
 - Steps: 5,000
-- Per device batch size: 16 → **reduce to 1** (VRAM constraint on RTX 2080 Ti, same fix as UWB-ATCC)
-- Gradient accumulation: 2 → **increase to 16** (maintain effective batch = 64)
+- Per device batch size: 1 (reduced from 16 — VRAM constraint on RTX 2080 Ti)
+- Gradient accumulation: 16 (effective batch = 64 across 4 GPUs)
 - Learning rate: 5e-4
 - mask_time_prob: 0.01
+- min_duration_in_seconds: 0.5 (filter 45 clips too short for mask_time_length=12)
 - Warmup steps: 1,000
 - fp16: enabled, fp16_full_eval: disabled (CUBLAS crash prevention)
 - Multi-GPU: DDP via torchrun
@@ -59,12 +60,33 @@ export PATH=$HOME/bin:$PATH
 CUDA_VISIBLE_DEVICES=0,1,2,3 bash ~/Pilot-to-ATC-Research/models/w2v2/scripts/train_wav2vec2_atcosim_large.sh
 ```
 
+### Learning Curve
+
+| Step | Epoch | Train Loss | Eval WER |
+|------|-------|-----------|---------|
+| 500 | 4.24 | — | 4.13% |
+| 1000 | 8.47 | 1.0951 | 3.48% |
+| 1500 | 12.71 | — | 2.84% |
+| 2000 | 16.94 | 0.0955 | 2.14% |
+| 2500 | 21.19 | — | 2.17% |
+| 3000 | 25.42 | 0.0590 | 1.97% |
+| 3500 | 29.66 | — | 2.02% |
+| 4000 | 33.89 | 0.0358 | 1.79% |
+| **4500** | **38.13** | — | **1.66%** |
+| 5000 | 42.37 | 0.0216 | 1.67% |
+
 ### Results
 | Metric | Value |
 |--------|-------|
-| Eval WER (greedy) | TBD |
-| Train loss | TBD |
-| Runtime | TBD |
+| Best Eval WER (greedy, step 4500) | **1.66%** |
+| Final Eval WER (greedy, step 5000) | 1.67% |
+| Final Train Loss | 0.0216 |
+| Runtime | ~3.8 hours |
+
+### Notes
+- WER converges fast — already 4.13% at step 500 vs 27.99% for UWB-ATCC at the same point
+- Model nearly plateaus after step 2000 (~2.1%), then slowly improves to 1.66%
+- ATCOSIM is a much easier corpus than UWB-ATCC: close-talk headset, controlled simulation environment, no background noise
 
 ---
 

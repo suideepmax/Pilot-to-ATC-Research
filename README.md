@@ -16,12 +16,12 @@ Comparing end-to-end (Wav2Vec2) and hybrid (Canary-Qwen-2.5B) ASR models for Air
 
 All models trained for 10,000 steps with lr=5e-4, warmup=1,000, on 4x RTX 2080 Ti.
 
-### ATCOSIM Corpus (Simulated ATC, non-native speakers) — In Progress
+### ATCOSIM Corpus (Simulated ATC, non-native speakers)
 
 | Model | Params Trained | WER | Training Time |
 |---|---|---|---|
-| W2V2 Large (no LM) | 317M (100%) | TBD | TBD |
-| W2V2 Large (with KenLM) | 317M (100%) | TBD | TBD |
+| W2V2 Large (greedy, step 4500) | 317M (100%) | **1.66%** | ~3.8 hrs |
+| W2V2 Large (with KenLM) | 317M (100%) | TBD | — |
 
 See: `models/w2v2/docs/PROGRESS_ATCOSIM.md`
 
