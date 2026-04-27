@@ -40,15 +40,20 @@
 - Pretrained on: LibriSpeech 960h + 60,000h unlabeled audio via self-training
 
 ### Hyperparameters
-- Steps: 5,000
-- Per device batch size: 1 (reduced from 16 — VRAM constraint on RTX 2080 Ti)
-- Gradient accumulation: 16 (effective batch = 64 across 4 GPUs)
-- Learning rate: 5e-4
-- mask_time_prob: 0.01
-- min_duration_in_seconds: 0.5 (filter 45 clips too short for mask_time_length=12)
-- Warmup steps: 1,000
-- fp16: enabled, fp16_full_eval: disabled (CUBLAS crash prevention)
-- Multi-GPU: DDP via torchrun
+
+| Setting | Paper (original) | This run | Note |
+|---|---|---|---|
+| max_steps | 5,000 | 5,000 | ✓ same |
+| learning_rate | 5e-4 | 5e-4 | ✓ same |
+| mask_time_prob | 0.01 | 0.01 | ✓ same |
+| per_device_train_batch_size | 16 | 1 | ✗ VRAM constraint (RTX 2080 Ti, 11GB) |
+| gradient_accumulation | 2 | 16 | ✗ compensates batch, but effective batch = 64 vs paper's 128 |
+| training method | python3 (DataParallel) | torchrun (DDP) | ✗ OOM with DP on 317M model |
+| min_duration_in_seconds | 0.2 | 0.5 | ✗ 45 ATCOSIM clips crash mask (seq_len < mask_len=12) |
+| fp16_full_eval | not set | False | ✗ prevents CUBLAS crash on RTX 2080 Ti |
+| gradient_checkpointing | yes | yes | ✓ same |
+
+**Training was NOT identical to the paper.** Effective batch size was halved (64 vs 128) and DDP was used instead of DataParallel due to hardware constraints.
 
 ### Command
 ```bash
@@ -83,10 +88,21 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 bash ~/Pilot-to-ATC-Research/models/w2v2/scripts/tr
 | Final Train Loss | 0.0216 |
 | Runtime | ~3.8 hours |
 
+### Eval (paper's eval_model.py, no LM)
+Run command:
+```bash
+python3 src/eval_model.py \
+  --pretrained-model $MODEL \
+  --test-set experiments/data/atcosim_corpus/test \
+  --print-output true
+```
+Result: **WER 1.67%** — matches step-5000 training eval exactly.
+
 ### Notes
 - WER converges fast — already 4.13% at step 500 vs 27.99% for UWB-ATCC at the same point
-- Model nearly plateaus after step 2000 (~2.1%), then slowly improves to 1.66%
+- Model nearly plateaus after step 2000 (~2.1%), then slowly improves to 1.67%
 - ATCOSIM is a much easier corpus than UWB-ATCC: close-talk headset, controlled simulation environment, no background noise
+- Training deviated from paper on batch size and training framework due to hardware limits — results are not directly comparable to paper's reported numbers
 
 ---
 
@@ -108,21 +124,16 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 bash ~/Pilot-to-ATC-Research/models/w2v2/scripts/tr
 Evaluated the full-data model on speaker-independent test splits to measure true generalization.
 test_female (zf3) and test_male (gm1, gm2) are speakers whose voices were **never seen during training**.
 
-### Method
-Custom eval script — greedy CTC predictions vs original text using `evaluate["wer"]`.
-Note: `eval_model.py` has a bug where it uses `processor.decode(labels, group_tokens=False)` as the
-reference (outputs raw CTC characters with `|` separators), producing false high WER. Fixed by
-comparing against the original text from the data loader directly.
+### Status: NOT a valid speaker-independent eval
 
-### Results
+The gender splits (test_female = zf3, test_male = gm1/gm2) are subsets of the **full** corpus filtered by speaker. The model was trained on a **random 80/20 split of all 10 speakers**, so ~80% of zf3's and gm1/gm2's utterances were already in the training set. This is data leakage — not a true unseen-speaker evaluation.
 
-| Split | Speakers | Utterances | WER (greedy) |
+To do a valid speaker-independent eval, a separate model would need to be trained on `train_female` / `train_male` splits and tested on the corresponding held-out speakers. That is a different experiment (Phase 4 remains TODO).
+
+### Discarded numbers (not trustworthy due to data leakage)
+| Split | eval_model.py WER | Custom script WER | Valid? |
 |---|---|---|---|
-| test_female | zf3 (Swiss-French accent) | 616 | **0.86%** |
-| test_male | gm1, gm2 (German accent) | 638 | **0.01%** |
+| test_female (zf3) | 86% | 0.86% | ✗ No — ~80% of utterances were in training |
+| test_male (gm1, gm2) | 1.23% | 0.01% | ✗ No — same issue |
 
-### Analysis
-- Model generalizes near-perfectly to unseen speakers despite being trained on a random (non-speaker-split) 80/20 split
-- 0.01% for test_male is essentially perfect — gm1/gm2 German accent is very close to the training distribution (sm1-sm4 also German)
-- 0.86% for test_female is slightly higher — zf3 has a Swiss-French accent, the only French-accented speaker in the corpus, making it the most out-of-distribution voice
-- ATCOSIM corpus is clean enough (close-talk headset, scripted ATC phrases) that the model adapts almost perfectly across speakers
+Note: eval_model.py also has a bug (uses CTC-decoded labels as reference) that inflates WER vs the custom script.
