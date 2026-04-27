@@ -185,9 +185,41 @@ bash models/w2v2/scripts/eval_large_model.sh
 ```
 
 ### Final Results vs Paper (confirmed across 2 eval runs)
-| Metric | Paper | Our Run 1 | Our Run 2 | Average |
-|--------|-------|-----------|-----------|---------|
-| WER no LM (beam search) | 17.48% | 14.54% | 14.60% | **14.57%** |
-| WER with CTC+LM | 14.26% | 12.69% | 12.82% | **12.76%** |
+| Metric | Paper (Table 3) | Paper (HuggingFace card) | Our Run 1 | Our Run 2 | Average |
+|--------|----------------|--------------------------|-----------|-----------|---------|
+| WER no LM (beam search) | 17.48% | 17.56% | 14.54% | 14.60% | **14.57%** |
+| WER with CTC+LM | 14.26% | 13.72% | 12.69% | 12.82% | **12.76%** |
 
 We beat the paper on both metrics consistently across all runs.
+
+Note: slight discrepancy between Table 3 (17.48%) and HuggingFace model card (17.56%) — likely different text normalization at eval time.
+
+---
+
+### Comparison with Paper's Published Model (HuggingFace)
+
+Model card: `Jzuluaga/wav2vec2-large-960h-lv60-self-en-atc-uwb-atcc`
+
+**Paper's hyperparameters (from model card):**
+
+| Parameter | Paper | Our Run |
+|-----------|-------|---------|
+| Steps | 10,000 | 10,000 |
+| Learning rate | 1e-4 | **5e-4** |
+| Batch size (effective) | 24 | 64 (1×4GPUs×16acc) |
+| Training method | DataParallel | DDP (torchrun) |
+
+**Paper's training curve (from model card):**
+
+| Step | Epoch | Train Loss | Eval Loss | Eval WER (greedy) |
+|------|-------|-----------|-----------|-------------------|
+| 500 | 1.06 | 2.9016 | 0.9995 | — |
+| 1000 | 2.12 | 0.9812 | 0.3485 | 28.77% |
+| 1500 | 3.18 | 0.7842 | 0.2732 | 78.34% |
+| 2500 | 5.31 | 0.6527 | 0.2042 | 60.84% |
+| 5000 | 10.62 | 0.6605 | 0.1853 | 45.66% |
+| 10000 | 21.23 | 0.7287 | 0.1756 | **29.81%** |
+
+Paper's final greedy WER at step 10,000: 29.81%. Beam search + LM decoding brought it down to 17.56% (no LM beam search) and 13.72% (with LM). Our greedy training WER was ~15.07%, beam search gave 14.54% — a much smaller gap, suggesting our model produces cleaner logits.
+
+**Key observation:** We used a 5× higher learning rate (5e-4 vs 1e-4) and achieved lower WER. The higher LR combined with DDP and larger gradient accumulation appears to have resulted in better optimization for this corpus.
