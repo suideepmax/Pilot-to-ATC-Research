@@ -99,10 +99,24 @@ python3 src/eval_model.py \
 Result: **WER 1.67%** — matches step-5000 training eval exactly.
 
 ### Notes
+
+#### Why is 1.67% WER so low?
+
+**Genuine reasons (corpus is actually easier):**
+- ATCOSIM uses a **close-talk headset** in a controlled simulation — very clean audio, no background noise
+- UWB-ATCC is real communications — telephone quality, noise, real-world variation
+- ATCOSIM uses **scripted, repetitive ATC phrases** — limited vocabulary, highly predictable language patterns
+- The model (`wav2vec2-large-960h-lv60-self`) is pre-trained on 60k hours and adapts quickly to clean speech
+
+**Experimental design issues (inflate the number):**
+1. **Same speakers in train and test.** The 80/20 split is random — all 10 speakers appear in both sets. The model sees every speaker's voice during training. This is not measuring generalization to unseen speakers.
+2. **42 epochs of training.** 5000 steps on 7660 samples = 42 passes over the data. UWB-ATCC was ~7 epochs (10000 steps, much larger dataset). At 42 epochs, the model has near-memorized training utterances, and since test speakers overlap, test WER is very low.
+3. **Halved effective batch size.** Batch 64 vs paper's 128 — smaller batches with the same steps can increase overfitting.
+
+**Bottom line:** 1.67% is NOT directly comparable to UWB-ATCC's 14.54%. They are different corpora under different conditions. A fairer ATCOSIM number requires speaker-independent evaluation — training on `train_male`/`train_female` and testing on held-out speakers (Phase 4, not yet done).
+
 - WER converges fast — already 4.13% at step 500 vs 27.99% for UWB-ATCC at the same point
-- Model nearly plateaus after step 2000 (~2.1%), then slowly improves to 1.67%
-- ATCOSIM is a much easier corpus than UWB-ATCC: close-talk headset, controlled simulation environment, no background noise
-- Training deviated from paper on batch size and training framework due to hardware limits — results are not directly comparable to paper's reported numbers
+- Training deviated from paper on batch size and framework due to hardware — paper's exact params OOM on 11GB VRAM (confirmed)
 
 ---
 
