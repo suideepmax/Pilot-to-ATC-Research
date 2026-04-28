@@ -137,16 +137,37 @@ The paper trained for **20,000 steps** (4× more than our run). Our 5,000-step r
 
 ---
 
-## Phase 3 - KenLM + Final Evaluation [ ]
+## Phase 3 - KenLM + Final Evaluation [DONE]
 
-- Train 4-gram KenLM on ATCOSIM train transcripts
-- Evaluate with beam search + LM
+- Trained 4-gram KenLM on ATCOSIM train transcripts
+- Output: `experiments/data/atcosim_corpus/train/lm/atcosim_corpus_4g.binary`
+- Evaluated with `src/eval_model.py` (paper's eval script) + LM
+
+### Commands
+```bash
+# 1. Train KenLM
+export PATH=$HOME/kenlm/build/bin:$PATH
+bash src/run_train_kenlm.sh \
+  --dataset-name "atcosim_corpus" \
+  --text-file "experiments/data/atcosim_corpus/train/text"
+
+# 2. Eval with LM
+MODEL="experiments/results/baselines/wav2vec2-large-960h-lv60-self/atcosim_corpus/0.0ld_0.0ad_0.0attd_0.0fpd_0.01mtp_12mtl_0.0mfp_12mfl_16acc"
+LM="experiments/data/atcosim_corpus/train/lm/atcosim_corpus_4g.binary"
+python3 src/eval_model.py \
+  --language-model "$LM" \
+  --pretrained-model "$MODEL" \
+  --test-set "experiments/data/atcosim_corpus/test" \
+  --print-output "true"
+```
 
 ### Results
 | Metric | Value |
 |--------|-------|
-| WER no LM (beam search) | TBD |
-| WER with CTC+LM | TBD |
+| WER no LM (beam search) | 1.67% |
+| WER with CTC+KenLM | **1.28%** |
+
+KenLM reduces WER from 1.67% → 1.28% (0.39pp improvement).
 
 ---
 
