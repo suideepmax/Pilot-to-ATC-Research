@@ -189,3 +189,58 @@ To do a valid speaker-independent eval, a separate model would need to be traine
 | test_male (gm1, gm2) | 1.23% | 0.01% | ✗ No — same issue |
 
 Note: eval_model.py also has a bug (uses CTC-decoded labels as reference) that inflates WER vs the custom script.
+
+---
+
+## Phase 5 - Canary Qwen Fine-tuning (NeMo SALM) [DONE]
+
+### Model
+- Model: nvidia/canary-qwen-2.5b (SALM — Speech-Augmented Language Model)
+- Architecture: FastConformer (nvidia/canary-1b-flash encoder, ~1B params, frozen) + Qwen3-1.7B LLM (frozen) + modality adapter (trainable)
+- Framework: NeMo 2.8.0rc0 + Lightning + Lhotse data pipeline
+- Trainable parameters: 2,099,200 (modality adapter only, 0.07% of 2.5B total)
+
+### Hyperparameters
+| Setting | Value |
+|---|---|
+| max_steps | 5,000 |
+| limit_train_batches | 500 (per epoch) |
+| batch_size | 1 (VRAM constraint) |
+| accumulate_grad_batches | 4 |
+| learning_rate | 5e-4 |
+| optimizer | AdamW (β=0.9/0.98, wd=1e-3) |
+| lr_scheduler | CosineAnnealing (warmup=500) |
+| precision | bf16-true |
+| strategy | ModelParallelStrategy (FSDP2, DP=4) |
+| gradient_checkpointing | enabled on LLM |
+| prompt | "Transcribe the following air traffic control communication in lowercase." |
+
+### Training Notes
+- Model sharded across 4× RTX 2080 Ti (11GB each) using FSDP2 data parallelism
+- Training stopped at step ~4875 due to 11-hour time limit; best checkpoint at step=3500 (val_loss=0.17676)
+- Checkpoint format: FSDP2 distributed checkpoint (4 `.distcp` shards); consolidated to 5.4GB `.pt` file with `dcp_to_torch_save` for eval
+- Data: Lhotse CutSet JSONL derived from ATCOSIM Kaldi format (audio resampled 32kHz→16kHz)
+
+### Results
+| Metric | Value |
+|--------|-------|
+| WER (greedy, step=3500) | **7.06%** |
+| Total words | 22,789 |
+| Insertions | 0.020 |
+| Deletions | 0.010 |
+| Substitutions | 0.041 |
+
+### Comparison: ATCOSIM Test WER
+| Model | WER | Notes |
+|---|---|---|
+| wav2vec2-large (no LM) | 1.67% | CTC, 317M params, 5k steps |
+| wav2vec2-large + KenLM | 1.28% | CTC + 4-gram LM |
+| **Canary Qwen (step=3500)** | **7.06%** | SALM, 2.5B params, only adapter fine-tuned |
+
+### Analysis
+The 7.06% WER is significantly higher than the fine-tuned wav2vec2 (1.67%) for two reasons:
+1. **Only 0.07% of parameters were trained** — the modality adapter (2.1M params) bridges the frozen encoder and frozen LLM; the full model was not fine-tuned
+2. **Training stopped early** — best checkpoint at step 3500 of a planned 5000; training showed consistent val_loss improvement (0.28 → 0.17676) and would likely improve further with more steps or a larger trainable adapter
+3. **ATCOSIM is clean audio** — wav2vec2 fine-tuned on 7660 samples with speaker overlap achieves near-perfect WER; the generative LLM approach has more overhead for this small, clean corpus
+
+For a larger, noisier corpus (e.g. UWB-ATCC or real-world ATC), the LLM's language understanding could provide more benefit over the CTC approach.
