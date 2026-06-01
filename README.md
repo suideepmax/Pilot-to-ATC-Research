@@ -20,8 +20,9 @@ All models trained for 10,000 steps with lr=5e-4, warmup=1,000, on 4x RTX 2080 T
 
 | Model | Params Trained | WER | Training Time |
 |---|---|---|---|
-| W2V2 Large (greedy, step 4500) | 317M (100%) | **1.66%** | ~3.8 hrs |
-| W2V2 Large (with KenLM) | 317M (100%) | TBD | — |
+| W2V2 Large (no LM, step 4500) | 317M (100%) | 1.66% | ~3.8 hrs |
+| W2V2 Large (with KenLM) | 317M (100%) | **1.28%** | ~3.8 hrs |
+| Canary-Qwen (adapter only, step 3500) | 2.1M (0.07%) | 7.06% | ~4.9 hrs |
 
 See: `models/w2v2/docs/PROGRESS_ATCOSIM.md`
 
@@ -53,11 +54,13 @@ See: `models/w2v2/docs/PROGRESS_ATCOSIM.md`
 
 ## Key Findings
 
-W2V2 reaches lower WER (14.54%) than Canary-Qwen (20.70%) despite 9x fewer total parameters. Full fine-tuning of a CTC model adapts more effectively to ATC domain than LoRA on a hybrid SALM.
+W2V2 reaches lower WER (14.54%) than Canary-Qwen (20.70%) on UWB-ATCC despite 9x fewer total parameters. Full fine-tuning of a CTC model adapts more effectively to ATC domain than LoRA on a hybrid SALM.
 
 However, Canary-Qwen shows extreme parameter efficiency: 0.97% of parameters trained (27.8M out of 2.87B) gets within 6% absolute WER of a fully fine-tuned 317M model.
 
-Adding regularization (SpecAugment, dropout, weight decay) to Canary-Qwen cut WER from 23.32% to 20.70%. The original 24% plateau was overfitting, not an architectural limit. NVIDIA's default config was calibrated for 234k hours, not 10 hours.
+Adding regularization (SpecAugment, dropout, weight decay) to Canary-Qwen cut WER from 23.32% to 20.70% on UWB-ATCC. The original 24% plateau was overfitting, not an architectural limit.
+
+On ATCOSIM, fine-tuning only the modality adapter (0.07% of params, 2.1M) gave 7.06% WER — higher than W2V2's 1.28% but expected given the limited trainable capacity. The frozen LLM backbone's language understanding is underutilized when the adapter bridge is the only trained component.
 
 ## Repository Structure
 ```
