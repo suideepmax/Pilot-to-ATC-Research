@@ -22,7 +22,8 @@ All models trained for 10,000 steps with lr=5e-4, warmup=1,000, on 4x RTX 2080 T
 |---|---|---|---|
 | W2V2 Large (no LM, step 4500) | 317M (100%) | 1.66% | ~3.8 hrs |
 | W2V2 Large (with KenLM) | 317M (100%) | **1.28%** | ~3.8 hrs |
-| Canary-Qwen (adapter only, step 3500) | 2.1M (0.07%) | 7.06% | ~4.9 hrs |
+| Canary-Qwen v1 (adapter only, step 3500) | 2.1M (0.07%) | 7.06% | ~4.9 hrs |
+| Canary-Qwen v3 (LoRA + SpecAugment, step 7000) | 27.8M (0.97%) | **3.33%** | ~5.1 hrs |
 
 See: `models/w2v2/docs/PROGRESS_ATCOSIM.md`
 
@@ -60,7 +61,7 @@ However, Canary-Qwen shows extreme parameter efficiency: 0.97% of parameters tra
 
 Adding regularization (SpecAugment, dropout, weight decay) to Canary-Qwen cut WER from 23.32% to 20.70% on UWB-ATCC. The original 24% plateau was overfitting, not an architectural limit.
 
-On ATCOSIM, fine-tuning only the modality adapter (0.07% of params, 2.1M) gave 7.06% WER — higher than W2V2's 1.28% but expected given the limited trainable capacity. The frozen LLM backbone's language understanding is underutilized when the adapter bridge is the only trained component.
+On ATCOSIM, v1 (adapter-only, 0.07% of params) gave 7.06% WER. Adding LoRA r=128 + SpecAugment (v3, same config as UWB-ATCC) dropped it to 3.33% — a 2× improvement from giving the LLM's attention layers room to adapt.
 
 ## Repository Structure
 ```
