@@ -172,7 +172,7 @@ KenLM reduces WER from 1.67% → 1.28% (0.39pp improvement).
 
 ---
 
-## Phase 4 - Gender Experiments (Speaker-Independent Eval) [DONE]
+## Phase 4 - Gender Experiments (Speaker-Independent Eval) [ATTEMPTED — DATA LEAKAGE FOUND]
 
 Evaluated the full-data model on speaker-independent test splits to measure true generalization.
 test_female (zf3) and test_male (gm1, gm2) are speakers whose voices were **never seen during training**.

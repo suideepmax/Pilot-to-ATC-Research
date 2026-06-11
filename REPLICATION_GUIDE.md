@@ -70,7 +70,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 bash ~/Pilot-to-ATC-Research/models/w2v2/scripts/tr
 Training details:
 - Model: facebook/wav2vec2-large-960h-lv60-self (317M params, 100% trained)
 - Steps: 10,000 | LR: 5e-4 | Warmup: 1,000
-- Effective batch size: 128 (16/GPU x 4 GPUs x 2 grad accum)
+- Effective batch size: 64 (1/GPU x 4 GPUs x 16 grad accum) — paper used 24 on 1 GPU
 - Precision: fp16 mixed | Multi-GPU: DDP
 - Estimated time: ~8.6 hours on 4x RTX 2080 Ti
 
@@ -219,7 +219,7 @@ for s in samples:
 print(f'WER: {wer(refs, hyps)*100:.2f}%')
 "
 ```
-Expected: LoRA = 23.32% WER | Encoder unfrozen = 23.82% WER
+Expected: LoRA = 23.32% WER | Encoder unfrozen = 23.82% WER | v3 (LoRA + SpecAugment + regularization) = 20.70% WER
 
 ---
 
@@ -245,7 +245,8 @@ Expected: LoRA = 23.32% WER | Encoder unfrozen = 23.82% WER
 |---|---|---|---|
 | W2V2 Large (no LM) | 317M (100%) | 14.54% | ~8.6 hrs |
 | W2V2 Large (with KenLM) | 317M (100%) | 12.69% | ~8.6 hrs |
-| Canary-Qwen LoRA | 27.8M (0.97%) | 23.32% | ~5.3 hrs |
+| Canary-Qwen v3 (LoRA + SpecAugment) | 27.8M (0.97%) | 20.70% | ~5.3 hrs |
+| Canary-Qwen LoRA (no regularization) | 27.8M (0.97%) | 23.32% | ~5.3 hrs |
 | Canary-Qwen Unfrozen | 838.8M (32.8%) | 23.82% | ~5.3 hrs |
 | Canary-Qwen Zero-Shot | 0 | 81.49% | N/A |
 
