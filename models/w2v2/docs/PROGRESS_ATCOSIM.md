@@ -46,14 +46,15 @@
 | max_steps | 5,000 | 5,000 | ✓ same |
 | learning_rate | 5e-4 | 5e-4 | ✓ same |
 | mask_time_prob | 0.01 | 0.01 | ✓ same |
-| per_device_train_batch_size | 16 | 1 | ✗ VRAM constraint (RTX 2080 Ti, 11GB) |
-| gradient_accumulation | 2 | 16 | ✗ compensates batch, but effective batch = 64 vs paper's 128 |
+| per_device_train_batch_size | 24 | 1 | ✗ VRAM constraint (RTX 2080 Ti, 11GB) |
+| gradient_accumulation | 4 | 16 | ✗ compensates batch, but effective batch = 64 vs paper's 96 |
+| GPUs | 1 | 4 | ✗ paper used 1 GPU (DataParallel on single machine) |
 | training method | python3 (DataParallel) | torchrun (DDP) | ✗ OOM with DP on 317M model |
 | min_duration_in_seconds | 0.2 | 0.5 | ✗ 45 ATCOSIM clips crash mask (seq_len < mask_len=12) |
 | fp16_full_eval | not set | False | ✗ prevents CUBLAS crash on RTX 2080 Ti |
 | gradient_checkpointing | yes | yes | ✓ same |
 
-**Training was NOT identical to the paper.** Effective batch size was halved (64 vs 128) and DDP was used instead of DataParallel due to hardware constraints.
+**Training was NOT identical to the paper.** Effective batch size was smaller (64 vs 96) and DDP was used instead of DataParallel due to hardware constraints.
 
 ### Command
 ```bash
@@ -109,7 +110,7 @@ The paper's HuggingFace model card (`Jzuluaga/wav2vec2-large-960h-lv60-self-en-a
 
 The paper trained for **20,000 steps** (4× more than our run). Our 5,000-step run matched the paper's final 1.67% WER.
 
-**Why we converged faster:** Our effective batch size was 64 (vs paper's 128). Smaller batches produce more gradient updates per epoch — the model progresses through more weight updates for the same number of steps. At step 5,000 we had already run 42 epochs, while the paper at step 5,000 was at epoch 64 (more data per step means fewer epochs). Our faster convergence is consistent with smaller batch behavior.
+**Why we converged faster:** Our effective batch size was 64 (vs paper's 96). Smaller batches produce more gradient updates per epoch. At step 5,000 we had already run 42 epochs, while the paper at step 5,000 was at epoch 64. Our faster convergence is consistent with smaller batch behavior.
 
 **Bottom line:** Results are equivalent to paper. The paper required 4× more steps due to larger batch size.
 
@@ -128,7 +129,7 @@ The paper trained for **20,000 steps** (4× more than our run). Our 5,000-step r
 **Experimental design issues (inflate the number):**
 1. **Same speakers in train and test.** The 80/20 split is random — all 10 speakers appear in both sets. The model sees every speaker's voice during training. This is not measuring generalization to unseen speakers.
 2. **42 epochs of training.** 5000 steps on 7660 samples = 42 passes over the data. UWB-ATCC was ~7 epochs (10000 steps, much larger dataset). At 42 epochs, the model has near-memorized training utterances, and since test speakers overlap, test WER is very low.
-3. **Halved effective batch size.** Batch 64 vs paper's 128 — smaller batches with the same steps can increase overfitting.
+3. **Smaller effective batch size.** Batch 64 vs paper's 96 — more gradient updates per epoch, contributes to faster convergence but also higher overfitting risk.
 
 **Bottom line:** 1.67% is NOT directly comparable to UWB-ATCC's 14.54%. They are different corpora under different conditions. A fairer ATCOSIM number requires speaker-independent evaluation — training on `train_male`/`train_female` and testing on held-out speakers (Phase 4, not yet done).
 
