@@ -124,7 +124,7 @@ KenLM helps more on UWB-ATCC because its broader vocabulary has more room for LM
 
 2. **Higher LR outperformed paper:** LR=5e-4 (vs paper's 1e-4) combined with DDP yielded significantly lower WER on UWB-ATCC (14.57% vs 17.56%).
 
-3. **Faster convergence with smaller batch:** Halved effective batch size (64 vs 128) meant more gradient updates per epoch. ATCOSIM converged to the paper's 20k-step result in just 5k steps.
+3. **Faster convergence with smaller batch:** Our effective batch size (64) was smaller than the paper's (96 for ATCOSIM, 24 for UWB-ATCC), giving more gradient updates per epoch. ATCOSIM converged to the paper's 20k-step result in just 5k steps.
 
 4. **eval_model.py bug (no LM):** When no LM is provided, `pred_str_ctc_lm` is set equal to the reference text, making the hypo output file look like perfect predictions. Actual WER is computed from greedy `pred_str` vs decoded labels — the printed WER is correct, only the hypo file is misleading.
 
@@ -152,21 +152,27 @@ All training was done in `/home/kotasthane/w2v2-air-traffic` (the paper's repo c
 
 ## Canary Qwen (SALM) Results — ATCOSIM
 
-Fine-tuned `nvidia/canary-qwen-2.5b` (SALM: FastConformer encoder + Qwen3-1.7B LLM) on ATCOSIM.  
-Only the modality adapter was trained (2.1M / 2.5B params = 0.07%).
+Fine-tuned `nvidia/canary-qwen-2.5b` (SALM: FastConformer encoder + Qwen3-1.7B LLM) on ATCOSIM. Two runs:
 
-| Model | WER | Notes |
-|-------|-----|-------|
-| wav2vec2-large (no LM) | 1.67% | CTC, all layers fine-tuned |
-| wav2vec2-large + KenLM | 1.28% | CTC + 4-gram LM |
-| **Canary Qwen (step=3500)** | **7.06%** | SALM, adapter-only fine-tuning |
+| Model | Trainable Params | WER | Notes |
+|-------|-----------------|-----|-------|
+| wav2vec2-large (no LM) | 317M (100%) | 1.67% | CTC, full fine-tuning |
+| wav2vec2-large + KenLM | 317M (100%) | 1.28% | CTC + 4-gram LM |
+| Canary Qwen v1 (adapter only) | 2.1M (0.07%) | 7.06% | modality adapter only, no LoRA |
+| **Canary Qwen v3 (LoRA + SpecAugment)** | **27.8M (0.97%)** | **3.33%** | same config as UWB-ATCC v3 |
 
-The higher WER (7.06% vs 1.67%) reflects that only 0.07% of the model was trained. The frozen LLM backbone provides language modeling capability, but the adapter bridge is limited in capacity after just ~4875 training steps. With full fine-tuning or a larger adapter, the LLM's language understanding could further reduce WER — particularly beneficial for noisier corpora like UWB-ATCC where language context matters more.
+v1 → v3 improvement (7.06% → 3.33%) came from three changes: adding LoRA r=128 to the LLM attention layers (2.1M → 27.8M trainable params), adding SpecAugment, and increasing data coverage (~2.6 → ~10.4 effective data epochs).
 
 ---
 
+## Completed
+
+- [x] UWB-ATCC: wav2vec2-large fine-tuning + KenLM — 14.54% / 12.76% WER
+- [x] ATCOSIM: wav2vec2-large fine-tuning + KenLM — 1.67% / 1.28% WER
+- [x] UWB-ATCC: Canary Qwen v3 (LoRA + SpecAugment) — 20.70% WER
+- [x] ATCOSIM: Canary Qwen v3 (LoRA + SpecAugment) — 3.33% WER
+
 ## Pending / Next Steps
 
-- [ ] **ATCOSIM Phase 4 (valid):** Train separate models on `train_male`/`train_female` splits, evaluate on held-out speakers for true speaker-independent WER
-- [ ] **Canary Qwen on UWB-ATCC:** Fine-tune the SALM model on UWB-ATCC (noisier, real-world ATC) where the LLM backbone may provide larger gains
-- [ ] **UWB-ATCC ablations:** Explore effect of dropout, mask_time_prob on UWB-ATCC
+- [ ] **ATCOSIM Phase 4 (valid):** Train separate models on `train_male`/`train_female` splits, evaluate on held-out speakers for true speaker-independent WER (prior attempt had data leakage — random 80/20 split meant test speakers appeared in training)
+- [ ] **UWB-ATCC W2V2 ablations:** Effect of dropout, mask_time_prob on UWB-ATCC W2V2
