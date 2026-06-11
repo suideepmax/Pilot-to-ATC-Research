@@ -100,7 +100,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 bash ablations/uwb_atcc/train_w2v2_base.sh
 ### Hyperparameters
 - Steps: 10,000
 - Per device batch size: 1 (reduced from 16 due to 11GB VRAM constraint)
-- Gradient accumulation: 16 (effective batch = 64 across 4 GPUs — matches paper)
+- Gradient accumulation: 16 (effective batch = 64 across 4 GPUs)
 - Learning rate: 5e-4
 - mask_time_prob: 0.01
 - Warmup steps: 1,000
@@ -200,14 +200,17 @@ Note: slight discrepancy between Table 3 (17.48%) and HuggingFace model card (17
 
 Model card: `Jzuluaga/wav2vec2-large-960h-lv60-self-en-atc-uwb-atcc`
 
-**Paper's hyperparameters (from model card):**
+**Paper's hyperparameters (from model card — Transformers 4.24.0):**
 
 | Parameter | Paper | Our Run |
 |-----------|-------|---------|
 | Steps | 10,000 | 10,000 |
 | Learning rate | 1e-4 | **5e-4** |
-| Batch size (effective) | 24 | 64 (1×4GPUs×16acc) |
-| Training method | DataParallel | DDP (torchrun) |
+| Effective batch size | **24** | **64** (1×16×4GPUs) |
+| Gradient accumulation | 1 (none) | 16 |
+| Training method | DataParallel | DDP (torchrun, 4 GPUs) |
+
+Note: the model card shows only `train_batch_size: 24` with no `gradient_accumulation_steps` or `total_train_batch_size` line. The Transformers 4.24.0 card generator only writes those lines when grad_acc > 1 and total ≠ train_batch_size. Their absence confirms grad_acc=1 and effective batch=24.
 
 **Paper's training curve (from model card):**
 
