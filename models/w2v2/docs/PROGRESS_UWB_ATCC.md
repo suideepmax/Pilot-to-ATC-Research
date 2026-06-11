@@ -184,13 +184,15 @@ export LD_LIBRARY_PATH=$HOME/miniconda3/pkgs/libboost-1.82.0-h6fcfa73_3/lib:$LD_
 bash models/w2v2/scripts/eval_large_model.sh
 ```
 
-### Final Results vs Paper (confirmed across 2 eval runs)
-| Metric | Paper (Table 3) | Paper (HuggingFace card) | Our Run 1 | Our Run 2 | Average |
-|--------|----------------|--------------------------|-----------|-----------|---------|
-| WER no LM (beam search) | 17.48% | 17.56% | 14.54% | 14.60% | **14.57%** |
-| WER with CTC+LM | 14.26% | 13.72% | 12.69% | 12.82% | **12.76%** |
+### Final Results vs Paper
+| Metric | Paper (Table 3) | Paper (HuggingFace card) | **Our Result** |
+|--------|----------------|--------------------------|----------------|
+| WER no LM (greedy) | 17.48% | 17.56% | **14.54%** |
+| WER with CTC+KenLM | 14.26% | 13.72% | **12.69%** |
 
-We beat the paper on both metrics consistently across all runs.
+We beat the paper on both metrics. The no-LM result is greedy (argmax) CTC decoding — eval_model.py uses greedy when no LM is provided.
+
+Note: a second standalone eval of the same checkpoint yielded 14.60% / 12.82% (minor run-to-run variation); the canonical stored result in `finetuned_results_v2.json` is 14.54% / 12.69%.
 
 Note: slight discrepancy between Table 3 (17.48%) and HuggingFace model card (17.56%) — likely different text normalization at eval time.
 
@@ -223,6 +225,6 @@ Note: the model card shows only `train_batch_size: 24` with no `gradient_accumul
 | 5000 | 10.62 | 0.6605 | 0.1853 | 45.66% |
 | 10000 | 21.23 | 0.7287 | 0.1756 | **29.81%** |
 
-Paper's final greedy WER at step 10,000: 29.81%. Beam search + LM decoding brought it down to 17.56% (no LM beam search) and 13.72% (with LM). Our greedy training WER was ~15.07%, beam search gave 14.54% — a much smaller gap, suggesting our model produces cleaner logits.
+Paper's training-time greedy WER at step 10,000: 29.81%. Their final eval used beam search decoding, bringing it to 17.56% (no LM) and 13.72% (with LM). Our training-time greedy WER was ~15.07%; standalone greedy eval on the final checkpoint gave 14.54% — a much smaller gap between training and eval, suggesting our model produces cleaner logits that need less decoding correction.
 
 **Key observation:** We used a 5× higher learning rate (5e-4 vs 1e-4) and achieved lower WER. The higher LR combined with DDP and larger gradient accumulation appears to have resulted in better optimization for this corpus.
