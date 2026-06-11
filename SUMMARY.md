@@ -42,16 +42,16 @@ Both use 80/20 train/test split (seed=1234), Kaldi format (wav.scp, text, utt2sp
 |-------|-------|-------|-----------|-------|
 | 3a | wav2vec2-base | 3,000 | 79.46% | Pipeline validation only |
 | 3b | wav2vec2-base | 10,000 | 60.70% | Full run, no LM |
-| 4 | wav2vec2-large-960h-lv60-self | 10,000 | ~15.1% avg | 3 independent runs |
+| 4 | wav2vec2-large-960h-lv60-self | 10,000 | 15.07 / 15.15 / 15.17% | 3 independent runs, training-time greedy eval |
 
-### Final results vs paper (Phase 5 — KenLM eval)
+### Final results vs paper (Phase 5 — standalone eval)
 
 | Metric | Paper (Table 3) | Paper (HuggingFace) | **Our Result** |
 |--------|----------------|---------------------|----------------|
-| WER no LM (beam search) | 17.48% | 17.56% | **14.57%** |
-| WER with CTC+KenLM | 14.26% | 13.72% | **12.76%** |
+| WER no LM (greedy) | 17.48% | 17.56% | **14.54%** |
+| WER with CTC+KenLM | 14.26% | 13.72% | **12.69%** |
 
-**We beat the paper on both metrics across all runs.**
+**We beat the paper on both metrics.**
 
 ### Learning curve (large model, Run 3)
 
@@ -67,7 +67,7 @@ Model crosses the paper's 17.48% WER at approximately step 2,500.
 
 ### Why we beat the paper
 
-The paper used LR=1e-4; we used 5e-4 (5× higher). Combined with DDP and a larger effective gradient accumulation, this led to better convergence on the UWB-ATCC corpus. The paper's greedy WER at step 10k was 29.81% — far higher than our 15.07% — indicating their model's logits were noisier before beam search decoding.
+The paper used LR=1e-4; we used 5e-4 (5× higher). Combined with DDP and a larger effective gradient accumulation, this led to better convergence on the UWB-ATCC corpus. The paper's training-time greedy WER at step 10k was 29.81% — far higher than our 15.07% — indicating their model's logits were noisier, requiring heavy beam search correction to reach 17.56%.
 
 ---
 
@@ -87,7 +87,7 @@ The paper used LR=1e-4; we used 5e-4 (5× higher). Combined with DDP and a large
 
 | Metric | Paper (HuggingFace, 20k steps) | **Our Result (5k steps)** |
 |--------|-------------------------------|--------------------------|
-| WER no LM (beam search) | 1.67% | **1.67%** |
+| WER no LM (greedy) | 1.67% | **1.67%** |
 | WER with CTC+KenLM | — | **1.28%** |
 
 **We matched the paper's final WER in ¼ the training steps.**
@@ -103,15 +103,15 @@ The paper trained for 20,000 steps and reached 1.67% WER. Our 5,000-step run hit
 | Train/test speaker overlap | Yes (random 80/20) | — |
 | Epochs | ~42 (risk of overfitting) | ~7 |
 
-**1.67% is not directly comparable to 14.57%.** Different corpora, different conditions. A fairer ATCOSIM number requires a speaker-independent setup (train on male speakers only, test on held-out female speakers, or vice versa) — not yet done.
+**1.67% is not directly comparable to 14.54%.** Different corpora, different conditions. A fairer ATCOSIM number requires a speaker-independent setup (train on male speakers only, test on held-out female speakers, or vice versa) — not yet done.
 
 ---
 
 ## KenLM Impact
 
-| Corpus | No LM (beam search) | With CTC+KenLM | Improvement |
-|--------|--------------------|--------------:|-------------|
-| UWB-ATCC | 14.57% | 12.76% | −1.81pp |
+| Corpus | No LM (greedy) | With CTC+KenLM | Improvement |
+|--------|---------------|--------------:|-------------|
+| UWB-ATCC | 14.54% | 12.69% | −1.85pp |
 | ATCOSIM | 1.67% | 1.28% | −0.39pp |
 
 KenLM helps more on UWB-ATCC because its broader vocabulary has more room for LM correction. ATCOSIM's restricted phrase set leaves less for the LM to fix.
@@ -122,7 +122,7 @@ KenLM helps more on UWB-ATCC because its broader vocabulary has more room for LM
 
 1. **DataParallel vs DDP:** The paper's original `python3` launcher triggers DataParallel, which causes OOM on 11GB GPUs for the 317M parameter model. Switching to `torchrun` (DDP) fixes this — each GPU only handles its own gradients via ring all-reduce instead of gathering everything to GPU 0.
 
-2. **Higher LR outperformed paper:** LR=5e-4 (vs paper's 1e-4) combined with DDP yielded significantly lower WER on UWB-ATCC (14.57% vs 17.56%).
+2. **Higher LR outperformed paper:** LR=5e-4 (vs paper's 1e-4) combined with DDP yielded significantly lower WER on UWB-ATCC (14.54% vs 17.56%).
 
 3. **Faster convergence with smaller batch:** Our effective batch size (64) was smaller than the paper's (96 for ATCOSIM, 24 for UWB-ATCC), giving more gradient updates per epoch. ATCOSIM converged to the paper's 20k-step result in just 5k steps.
 
@@ -167,7 +167,7 @@ v1 → v3 improvement (7.06% → 3.33%) came from three changes: adding LoRA r=1
 
 ## Completed
 
-- [x] UWB-ATCC: wav2vec2-large fine-tuning + KenLM — 14.54% / 12.76% WER
+- [x] UWB-ATCC: wav2vec2-large fine-tuning + KenLM — 14.54% / 12.69% WER
 - [x] ATCOSIM: wav2vec2-large fine-tuning + KenLM — 1.67% / 1.28% WER
 - [x] UWB-ATCC: Canary Qwen v3 (LoRA + SpecAugment) — 20.70% WER
 - [x] ATCOSIM: Canary Qwen v3 (LoRA + SpecAugment) — 3.33% WER

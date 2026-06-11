@@ -165,7 +165,7 @@ python3 src/eval_model.py \
 ### Results
 | Metric | Value |
 |--------|-------|
-| WER no LM (beam search) | 1.67% |
+| WER no LM (greedy) | 1.67% |
 | WER with CTC+KenLM | **1.28%** |
 
 KenLM reduces WER from 1.67% → 1.28% (0.39pp improvement).
