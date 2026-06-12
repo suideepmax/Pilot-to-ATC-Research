@@ -181,7 +181,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 \
 - Trainable: 27.8M / 2,870M (0.97%) via LoRA + modality adapter
 - Estimated time: ~5.3 hours on 4x RTX 2080 Ti
 
-### 2.11 Train Canary-Qwen (Encoder Unfrozen — 32.8% params) — Optional
+### 2.11 Train Canary-Qwen (Encoder Unfrozen — 29.2% params) — Optional
 ```bash
 cp ~/Pilot-to-ATC-Research/models/canary-qwen/scripts/salm_uwb_atcc_unfrozen.yaml ~/canary-ft/conf/
 rm -rf ~/canary-ft/experiments/checkpoints/*
@@ -191,7 +191,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 \
     --config-path=/home/kotasthane/canary-ft/conf \
     --config-name=salm_uwb_atcc_unfrozen
 ```
-- Trainable: 838.8M / 2,870M (32.8%)
+- Trainable: 838.8M / 2,870M (29.2%)
 - Estimated time: ~5.3 hours
 
 ### 2.12 Evaluate Fine-Tuned Model
@@ -247,7 +247,7 @@ Expected: LoRA = 23.32% WER | Encoder unfrozen = 23.82% WER | v3 (LoRA + SpecAug
 | W2V2 Large (with KenLM) | 317M (100%) | 12.69% | ~8.6 hrs |
 | Canary-Qwen v3 (LoRA + SpecAugment) | 27.8M (0.97%) | 20.70% | ~5.3 hrs |
 | Canary-Qwen LoRA (no regularization) | 27.8M (0.97%) | 23.32% | ~5.3 hrs |
-| Canary-Qwen Unfrozen | 838.8M (32.8%) | 23.82% | ~5.3 hrs |
+| Canary-Qwen Unfrozen | 838.8M (29.2%) | 23.82% | ~5.3 hrs |
 | Canary-Qwen Zero-Shot | 0 | 81.49% | N/A |
 
 All models: 10,000 steps, lr=5e-4, warmup=1,000, 4x RTX 2080 Ti.
