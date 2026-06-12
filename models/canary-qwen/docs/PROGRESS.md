@@ -28,10 +28,10 @@ WER: 81.49% (no fine-tuning)
 WER: 23.32% | val_loss best: 0.678
 Hyperparameters: lr=5e-4, warmup=1000, dropout=0.01, no SpecAugment, WD=1e-3
 
-### Run 2: Encoder Unfrozen (838.8M params, 32.8%)
+### Run 2: Encoder Unfrozen (838.8M params, 29.2%)
 WER: 23.82% | val_loss best: 0.649
 Same hyperparameters as Run 1, but FastConformer encoder unfrozen.
-Training 33x more parameters did not improve WER.
+Training 30x more parameters did not improve WER.
 
 ### Run 3: Lower LR (lr=1e-4, 10k steps)
 WER: 32.58% | val_loss best: 0.762
@@ -70,7 +70,7 @@ v3 converges faster than the original at every step after 500, and keeps improvi
 
 1. The 24% WER plateau in Runs 1-2 was caused by overfitting, not the frozen decoder. Adding regularization (SpecAugment + dropout + weight decay) cut WER from 23.32% to 20.70%.
 
-2. LoRA (0.97% params) with proper regularization outperforms unfreezing the encoder (32.8% params) without it: 20.70% vs 23.82%.
+2. LoRA (0.97% params) with proper regularization outperforms unfreezing the encoder (29.2% params) without it: 20.70% vs 23.82%.
 
 3. Learning rate must stay high (5e-4) for LoRA on small ATC data. Lower LR (1e-4, 3e-5) converges too slowly or overfits differently.
 

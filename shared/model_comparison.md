@@ -8,7 +8,7 @@
 | W2V2 Large (with KenLM) | 317M (100%) | 12.69% | ~8.6 hrs |
 | Canary-Qwen v3 (LoRA + regularization) | 27.8M (0.97%) | 20.70% | ~5.3 hrs |
 | Canary-Qwen (LoRA only) | 27.8M (0.97%) | 23.32% | ~5.3 hrs |
-| Canary-Qwen (encoder unfrozen) | 838.8M (32.8%) | 23.82% | ~5.3 hrs |
+| Canary-Qwen (encoder unfrozen) | 838.8M (29.2%) | 23.82% | ~5.3 hrs |
 | Canary-Qwen (zero-shot) | 0 | 81.49% | N/A |
 
 ## Hyperparameter Ablation (Canary-Qwen)
@@ -68,7 +68,7 @@ The v3 config converges faster at every step after 500, and keeps improving at s
 
 2. Adding SpecAugment, dropout (0.1), and weight decay (1e-2) to the Canary config reduced WER from 23.32% to 20.70%. The original 24% plateau was not an architectural limit but an overfitting problem. NVIDIA's default config was designed for 234k hours and had minimal regularization.
 
-3. Canary-Qwen shows parameter efficiency: 0.97% of parameters trained achieves better WER (20.70% with regularization) than training 32.8% without it (23.82%).
+3. Canary-Qwen shows parameter efficiency: 0.97% of parameters trained achieves better WER (20.70% with regularization) than training 29.2% without it (23.82%).
 
 4. Lowering the learning rate hurts: lr=1e-4 gives 32.58% and lr=3e-5 gives 60.46%. The LoRA adapters need aggressive updates (5e-4) to shift from general English to ATC domain, but also need regularization to avoid memorizing the small training set.
 
