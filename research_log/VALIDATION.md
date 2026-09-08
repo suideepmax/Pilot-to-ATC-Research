@@ -349,3 +349,31 @@ Conclusion: Giving Canary-Qwen the same in-domain KenLM access as W2V2 closes on
 Remaining Risks: Alpha was swept but not cross-validated on a held-out split distinct from the test set; the headline alpha=0.5 was chosen by an independent, pre-registered criterion (matching W2V2's own default) specifically to avoid this concern, but a fully rigorous treatment would tune alpha on a dev split.
 
 Related Records: [[VAL-008]], [[VAL-010]], [[DEC-002]]
+
+## VAL-014 — S4-FAIR: decoding-fairness comparison (N-best + in-domain KenLM) on Canary-Qwen v3
+
+Date: 2026-09-08
+Status: COMPLETE, PASS (result differs qualitatively from v1 — reported as-is, not adjusted)
+
+Objective: Repeat [[VAL-013]]'s decoding-fairness comparison on the v3 (regularized: LoRA dropout=0.1, SpecAugment, weight_decay=1e-2) checkpoint, since v3 is the manuscript's headline result (20.70%) and the fairness question applies to it independently of v1.
+
+Inputs / Configuration: v3 checkpoint (`~/canary-ft/experiments/checkpoints_v3_HISTORICAL_BACKUP_20260422/step=10000-last.ckpt`, config provenance verified genuine in [[VAL-012]]/[[ISS-009]]), same UWB-ATCC test set and KenLM binary as [[VAL-013]], same `generate_nbest.py`/`rescore_kenlm.py` scripts, unmodified.
+
+Procedure: Smoke-tested on 5 samples first (clean, no exceptions) before the full run. Full run: 2,885/2,886 samples succeeded (1 transient CUDA OOM at sample 1398, excluded — same isolated non-systematic failure mode as [[VAL-013]]).
+
+Actual Result:
+| Config | WER |
+|---|---|
+| Canary-Qwen v3 native, greedy (existing, [[VAL-012]]) | 20.70% |
+| Canary-Qwen v3 native, 5-beam rank-1 | 19.42% |
+| Canary-Qwen v3 + KenLM, 5-best rescore, alpha=0.5 (headline) | 20.14% |
+| Canary-Qwen v3 + KenLM, best alpha in sweep=0.1 | 19.44% |
+| Full alpha sweep | 0.0: 19.42% / 0.1: 19.44% / 0.3: 19.76% / 0.5: 20.14% / 0.7: 20.43% / 1.0: 20.75% |
+
+Evidence: `models/canary-qwen/scripts/nbest_v3_full.json`, `models/canary-qwen/scripts/kenlm_rescore_v3_results.json`.
+
+Conclusion: Unlike v1, KenLM rescoring does **not** help v3 — WER increases monotonically as alpha increases past ~0.1, and even the best point in the sweep (alpha=0.1, 19.44%) is a statistical tie with pure beam search (19.42%), not an improvement. All of v3's gain over greedy decoding comes from beam search itself; the external LM adds nothing and the pre-registered headline alpha=0.5 is actually worse than no-LM decoding for this checkpoint. Reported as-is (not replaced with a post-hoc best-alpha number) to avoid cherry-picking. Plausible explanation, not verified: v3's own training already includes SpecAugment/dropout/weight-decay regularization, so its LoRA-adapted decoder may already be better calibrated to in-domain phrasing than v1's, leaving less room for an external n-gram LM to add value — this is a hypothesis, not a tested claim.
+
+Remaining Risks: Same as [[VAL-013]] (alpha not tuned on a separate dev split). The negative result here is more likely to be robust precisely because it does not depend on picking a favorable alpha — it holds across the entire sweep above alpha=0.1.
+
+Related Records: [[VAL-013]], [[VAL-012]], [[VAL-008]]

@@ -23,6 +23,7 @@ Initialized: 2026-09-06. All records below were recovered from existing reposito
 - VAL-011 — SUPERSEDED by VAL-012 — apparent "no surviving v3 model" conclusion was itself caused by a caching-bug artifact, not a real problem
 - VAL-012 — FINAL: v1 (23.32%), v2 (23.82%), v3 (20.70%) all verified genuine via real inference, cross-checked against independent HuggingFace downloads and author's own result records — root cause of earlier confusion was a fixed-path caching collision in eval_finetuned.py
 - VAL-013 — S4-FAIR: Canary-Qwen v1 + in-domain KenLM (N-best rescore) closes only ~1.5 WER points (23.32%->21.79%); fairness fix does not explain the W2V2-Canary gap
+- VAL-014 — S4-FAIR: Canary-Qwen v3 + in-domain KenLM (N-best rescore) provides NO benefit (20.14% vs 19.42% beam-only, worse) — negative result, reported as-is
 
 ## Decisions
 - DEC-001 — Discard ATCOSIM gender-based WER results; require a re-split for speaker independence
@@ -47,6 +48,7 @@ Initialized: 2026-09-06. All records below were recovered from existing reposito
 - EXP-010 — Execution-ready adaptive research program (staged, gated, GPU-hour-minimizing) [PROPOSED, not executed — see research_report/FINAL_RESEARCH_PROGRAM.md]
 - EXP-011 — Re-run lower-LR (1e-4) Canary-Qwen UWB-ATCC ablation [PROPOSED, LOW PRIORITY, not executed — checkpoint lost, no citation-verified replacement yet]
 - EXP-012 — S4-FAIR: decoding-fairness comparison (N-best+KenLM on Canary-Qwen v1) [COMPLETE 2026-09-08 — WER 23.32%->22.28% (beam)->21.79% (+KenLM); fairness fix does not explain the W2V2-Canary gap]
+- EXP-013 — S4-FAIR: decoding-fairness comparison (N-best+KenLM on Canary-Qwen v3) [COMPLETE 2026-09-08 — WER 20.70%->19.42% (beam)->20.14% (+KenLM, WORSE); KenLM provides no benefit on the regularized checkpoint]
 
 ## Issues
 - ISS-001 — ATCOSIM gender-subset evaluation has train/test speaker leakage [RESOLVED by discarding]

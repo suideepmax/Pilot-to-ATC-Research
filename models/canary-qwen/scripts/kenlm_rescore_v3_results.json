@@ -1,0 +1,16 @@
+{
+  "samples": 2885,
+  "num_beams": 5,
+  "native_beam_rank1_wer": 0.194206082240681,
+  "headline_alpha": 0.5,
+  "headline_nbest_kenlm_wer": 0.20137983112514588,
+  "alpha_sweep": {
+    "0.0": 0.194206082240681,
+    "0.1": 0.19444635134207455,
+    "0.3": 0.19760417381753279,
+    "0.5": 0.20137983112514588,
+    "0.7": 0.20429738449921053,
+    "1.0": 0.20752385528935266
+  },
+  "note": "alpha=0.5 chosen to match pyctcdecode default used for W2V2+KenLM baseline, not tuned on this test set."
+}
