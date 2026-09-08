@@ -4,7 +4,7 @@ Usage: CUDA_VISIBLE_DEVICES=0 python eval_finetuned.py \
     --checkpoint ~/canary-ft/experiments/checkpoints/step=10000-last.ckpt \
     --test-manifest ~/canary-ft/data/test_manifest.json
 """
-import argparse, json, os, torch
+import argparse, hashlib, json, os, torch
 from torch.distributed.checkpoint.format_utils import dcp_to_torch_save
 from jiwer import wer
 
@@ -16,10 +16,18 @@ def main():
     p.add_argument('--max-samples', type=int, default=0)
     args = p.parse_args()
 
-    consolidated = '/tmp/canary_eval_consolidated.pt'
+    # Cache path is derived from the checkpoint path (not a fixed global path) so
+    # that concurrent evaluations of different checkpoints never collide and
+    # silently reuse the wrong weights. (Bug found and fixed 2026-09-08: a
+    # fixed '/tmp/canary_eval_consolidated.pt' path caused two evals run in
+    # parallel to load identical weights — see research_log/VALIDATION.md VAL-012.)
+    ckpt_hash = hashlib.sha256(os.path.abspath(args.checkpoint).encode()).hexdigest()[:16]
+    consolidated = f'/tmp/canary_eval_consolidated_{ckpt_hash}.pt'
     if not os.path.exists(consolidated):
-        print(f'Consolidating {args.checkpoint}...')
+        print(f'Consolidating {args.checkpoint} -> {consolidated}...')
         dcp_to_torch_save(args.checkpoint, consolidated)
+    else:
+        print(f'Reusing cached consolidation for this exact checkpoint: {consolidated}')
 
     state = torch.load(consolidated, map_location='cpu', weights_only=False)
     if 'state_dict' in state: state = state['state_dict']
