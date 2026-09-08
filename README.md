@@ -10,8 +10,8 @@ Comparing end-to-end (Wav2Vec2) and hybrid (Canary-Qwen-2.5B) ASR models for Air
 |---|---|---|---|
 | W2V2 Large (no LM) | 317M (100%) | 14.54% | ~8.6 hrs |
 | W2V2 Large (with KenLM) | 317M (100%) | 12.69% | ~8.6 hrs |
-| Canary-Qwen v3 (LoRA + reg) | 27.8M (0.97%) | 20.70% | ~5.3 hrs |
-| Canary-Qwen (LoRA only) | 27.8M (0.97%) | 23.32% | ~5.3 hrs |
+| Canary-Qwen v3 (LoRA + reg) | 27.8M (0.97%) | 20.70% | ~21 hrs (corrected 2026-09-08) |
+| Canary-Qwen (LoRA only) | 27.8M (0.97%) | 23.32% | ~21 hrs (verified) |
 | Canary-Qwen (zero-shot) | 0 | 81.49% | N/A |
 
 All models trained for 10,000 steps with lr=5e-4, warmup=1,000, on 4x RTX 2080 Ti.

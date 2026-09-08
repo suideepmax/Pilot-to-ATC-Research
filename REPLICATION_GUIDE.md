@@ -165,34 +165,49 @@ for split in ['train', 'test']:
 ### 2.9 Setup Training Config
 ```bash
 mkdir -p ~/canary-ft/conf
-cp ~/Pilot-to-ATC-Research/models/canary-qwen/scripts/salm_uwb_atcc.yaml ~/canary-ft/conf/
+cp ~/Pilot-to-ATC-Research/models/canary-qwen/scripts/salm_uwb_atcc_v1.yaml ~/canary-ft/conf/
 ```
 **Important**: Edit the cuts_path values in the YAML to match your actual paths.
 
-### 2.10 Train Canary-Qwen (LoRA — 0.97% params)
+### 2.10 Train Canary-Qwen v1 — LoRA baseline (0.97% params)
 ```bash
 cd ~/canary-ft
 ulimit -n 65536
 CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 \
     ~/NeMo/examples/speechlm2/salm_train.py \
     --config-path=/home/kotasthane/canary-ft/conf \
-    --config-name=salm_uwb_atcc
+    --config-name=salm_uwb_atcc_v1
 ```
 - Trainable: 27.8M / 2,870M (0.97%) via LoRA + modality adapter
-- Estimated time: ~5.3 hours on 4x RTX 2080 Ti
+- **Verified time: ~21 hours on 4x RTX 2080 Ti** (not ~5.3 hours as previously stated here — corrected 2026-09-08 after a fresh timed reproduction; see `research_log/VALIDATION.md` VAL-010)
+- Result: WER 23.32% (verified)
 
-### 2.11 Train Canary-Qwen (Encoder Unfrozen — 29.2% params) — Optional
+### 2.11 Train Canary-Qwen v2 — Encoder Unfrozen (29.2% params)
 ```bash
-cp ~/Pilot-to-ATC-Research/models/canary-qwen/scripts/salm_uwb_atcc_unfrozen.yaml ~/canary-ft/conf/
+cp ~/Pilot-to-ATC-Research/models/canary-qwen/scripts/salm_uwb_atcc_v2.yaml ~/canary-ft/conf/
 rm -rf ~/canary-ft/experiments/checkpoints/*
 ulimit -n 65536
 CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 \
     ~/NeMo/examples/speechlm2/salm_train.py \
     --config-path=/home/kotasthane/canary-ft/conf \
-    --config-name=salm_uwb_atcc_unfrozen
+    --config-name=salm_uwb_atcc_v2
 ```
 - Trainable: 838.8M / 2,870M (29.2%)
-- Estimated time: ~5.3 hours
+- Estimated time: ~21 hours (see v1 note above)
+- Result: WER 23.82% (verified via inference against the published model — **the config above is known NOT to reproduce this result**; see `salm_uwb_atcc_v2.yaml`'s header comment and `research_log/ISSUES.md` ISS-007)
+
+### 2.11b Train Canary-Qwen v3 — LoRA + Regularization (0.97% params, best result)
+```bash
+cp ~/Pilot-to-ATC-Research/models/canary-qwen/scripts/salm_uwb_atcc_v3.yaml ~/canary-ft/conf/
+ulimit -n 65536
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 \
+    ~/NeMo/examples/speechlm2/salm_train.py \
+    --config-path=/home/kotasthane/canary-ft/conf \
+    --config-name=salm_uwb_atcc_v3
+```
+- Trainable: 27.8M / 2,870M (0.97%), plus SpecAugment + dropout=0.1 + weight_decay=1e-2
+- Estimated time: ~21 hours (see v1 note above)
+- Result: WER 20.70% (verified twice: local checkpoint re-evaluated in isolation, and independently against the published HuggingFace model — bit-for-bit identical WER both times)
 
 ### 2.12 Evaluate Fine-Tuned Model
 ```bash
@@ -245,9 +260,9 @@ Expected: LoRA = 23.32% WER | Encoder unfrozen = 23.82% WER | v3 (LoRA + SpecAug
 |---|---|---|---|
 | W2V2 Large (no LM) | 317M (100%) | 14.54% | ~8.6 hrs |
 | W2V2 Large (with KenLM) | 317M (100%) | 12.69% | ~8.6 hrs |
-| Canary-Qwen v3 (LoRA + SpecAugment) | 27.8M (0.97%) | 20.70% | ~5.3 hrs |
-| Canary-Qwen LoRA (no regularization) | 27.8M (0.97%) | 23.32% | ~5.3 hrs |
-| Canary-Qwen Unfrozen | 838.8M (29.2%) | 23.82% | ~5.3 hrs |
+| Canary-Qwen v3 (LoRA + SpecAugment) | 27.8M (0.97%) | 20.70% | ~21 hrs (corrected 2026-09-08) |
+| Canary-Qwen LoRA (no regularization) | 27.8M (0.97%) | 23.32% | ~21 hrs (verified) |
+| Canary-Qwen Unfrozen | 838.8M (29.2%) | 23.82% | ~21 hrs (estimated; config unverified) |
 | Canary-Qwen Zero-Shot | 0 | 81.49% | N/A |
 
 All models: 10,000 steps, lr=5e-4, warmup=1,000, 4x RTX 2080 Ti.

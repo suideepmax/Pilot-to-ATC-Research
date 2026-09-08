@@ -174,3 +174,149 @@ Result: PASS — male run genuinely completed. WER = 19.973% on held-out `test_m
 Remaining Risks: None for this run specifically. [[ISS-005]] still applies if a future step adds LM fusion to decoding.
 
 Related Records: [[EXP-007]], [[VAL-005]], [[VAL-006]], [[ISS-006]], [[ISS-001]]
+
+---
+
+## VAL-008 — Canary-Qwen N-best generation feasibility (Spike A/B) confirmed via source-code inspection
+
+Date: 2026-09-07
+Status: PASS
+
+Objective: Determine whether the installed NeMo speechlm2 `SALM.generate()` supports N-best/beam-search decoding, needed for the decoding-fairness fix (N-best + external KenLM rescoring) proposed in `research_report/IEEE_REVIEW_RESPONSE_RESEARCH_PLAN.md` Section 8 and refined in `FINAL_RESEARCH_PROGRAM.md` Section 5.
+
+Inputs / Configuration: Installed `canary_ft` conda environment, NeMo 2.8.0rc0, file `nemo/collections/speechlm2/models/salm.py`.
+
+Procedure: Direct `grep`/`Read` of the installed source file (not the GitHub source, the actual on-disk installed package) for `generate`, `num_return_sequences`, `num_beams`, `GenerationConfig`.
+
+Expected Result: Either a custom, closed decoding path with no N-best support (would force the ILME/density-ratio fallback), or a pass-through to a standard, more flexible generation API.
+
+Actual Result: `SALM.generate()` (line 289) accepts an optional `generation_config: GenerationConfig` parameter and, at line 408, calls `self.llm.generate(**generation_inputs, **generation_kwargs, generation_config=generation_config)` — a direct pass-through to the Qwen3-1.7B LLM's standard HuggingFace `generate()` method. The docstring (line 317) explicitly demonstrates `GenerationConfig(do_sample=True, num_beams=5)` as supported usage.
+
+Evidence: `nemo/collections/speechlm2/models/salm.py` lines 289-413 (read in full this session).
+
+Result: PASS — N-best generation (via `GenerationConfig(num_beams=N, num_return_sequences=N)`) is feasible with zero code changes. This resolves the previously-open question from `IEEE_REVIEW_RESPONSE_RESEARCH_PLAN.md` Section 8 in the favorable direction and eliminates the need to consider ILME/density-ratio correction (a much more complex, unimplemented path) for the decoding-fairness fix.
+
+Remaining Risks: Not yet empirically executed (only verified against source) — a single-utterance smoke test confirming actual output shape/content is recommended before scheduling real compute on the decoding-fairness experiment, per the report's Spike A "GO CONDITION."
+
+Related Records: [[EXP-010]], [[DEC-005]]
+
+---
+
+## VAL-009 — Spike D: full Canary-Qwen decoder fine-tuning fits in VRAM on 4×RTX 2080 Ti (11GB) — GO
+
+Date: 2026-09-07
+Status: PASS (GO)
+
+Objective: Empirically determine whether unfreezing the full Qwen3-1.7B decoder (removing `^llm\..+$`/`^embed_tokens\..+$` from `freeze_params`, no LoRA block) fits in VRAM under the existing FSDP config (`tensor_parallel_size=1, data_parallel_size=4`), per the Spike D design in `research_report/FINAL_RESEARCH_PROGRAM.md` Section 3/Section 16 (EXP-ID S1-D).
+
+Inputs / Configuration: A new scratch config (`/tmp/.../scratchpad/salm_spike_d_full_decoder_smoke.yaml`, not committed to any repo) derived from `models/canary-qwen/scripts/salm_uwb_atcc.yaml`: `freeze_params` reduced to `perception.preprocessor`/`perception.encoder` only (no `llm`/`embed_tokens`), no `lora:` block (confirmed via `nemo/collections/speechlm2/parts/lora.py:maybe_install_lora` that omitting this key skips PEFT wrapping entirely — the LLM trains directly), `trainer.max_steps: 1`, `limit_train_batches: 1`, `limit_val_batches: 0`. Real UWB-ATCC training data (`~/canary-ft/data/train_cuts.jsonl.gz`) was used, not synthetic data.
+
+Procedure: Launched via `setsid`/`nohup` with explicit `conda activate canary_ft` (per [[ENV-004]]'s detached-launch requirement), `torchrun --nproc_per_node=4`, on the real 4-GPU FSDP topology. First attempt hit an unrelated Lightning config validation error (`val_check_interval` incompatible with `limit_train_batches=1`) — a config bug on the operator's part, not a VRAM signal; fixed by removing the stale `val_check_interval` key and relaunched.
+
+Expected Result: Either a clean single optimizer step (VRAM fits, GO) or `CUDA out of memory` (NO-GO).
+
+Actual Result: `[NeMo I ... optim_setup:231] Parameters | trainable=2033839104 (71.49%) | total=2844823552` — 2.03B trainable (llm 1.7B + embed_tokens 311M, matching the intended full-decoder-unfrozen config exactly), 813M (perception/encoder) correctly remained frozen. Training completed 1/1 step in ~4.95s (`train_step_timing in s=4.950`), `Trainer.fit stopped: max_steps=1 reached`, clean process exit, no `CUDA out of memory`, no traceback, no `ChildFailedError`. `nvidia-smi` post-run confirmed all 4 GPUs returned to idle (0% util, near-zero memory) — no leaked process.
+
+Evidence: `/tmp/.../scratchpad/spike_d_smoke_retry.log` (full training log, this session); direct process/GPU state checks via `pgrep`/`nvidia-smi` before, during, and after.
+
+Result: **PASS — GO.** Full Canary-Qwen decoder fine-tuning (adaptation-scope Branch 3 / EXP-ID S3-B3 in `FINAL_RESEARCH_PROGRAM.md`) is technically feasible on this hardware and should proceed to a real multi-hour run per the report's Stage 3 plan, pending explicit approval to launch that (much longer, ~21 GPU-hour) run.
+
+Limitations: This confirms VRAM fits for a **single step at `limit_train_batches=1`, batch_size=2**. It does not confirm behavior across a full 10,000-step run (e.g., memory fragmentation over time, gradient-accumulation-related peak usage at `accumulate_grad_batches=4`, or checkpoint-saving overhead, none of which were exercised in this 1-step test with checkpointing disabled). A benign warning also appeared: `Parameter freezing patterns UNMATCHED against any parameter: ['^perception\.preprocessor\..+$']` — this regex didn't match any actual submodule name, but did not affect the trainable-parameter split that was actually verified (2.03B trainable, matching llm+embed_tokens exactly).
+
+Related Records: [[EXP-010]], [[VAL-008]], [[DEC-005]], [[ENV-004]]
+
+---
+
+## VAL-010 — Stage 2 fresh Canary-Qwen v1-equivalent control checkpoint: trained, verified, and evaluated — WER matches historical figure
+
+Date: 2026-09-08
+Status: COMPLETE, PASS
+
+Objective: Establish a live, freshly-trained, config-verified Canary-Qwen "v1-equivalent" (LoRA q/v-only, no added regularization) checkpoint on UWB-ATCC to serve as the common reference point for the adaptation-scope and regularization studies in `research_report/FINAL_RESEARCH_PROGRAM.md` — Stage 2 / EXP-ID S2-CTRL, since no such checkpoint survived from before (checkpoints for this exact config were confirmed absent, [[ISS-009]]).
+
+Inputs / Configuration: Exact committed `models/canary-qwen/scripts/salm_uwb_atcc.yaml`, deployed unmodified to `~/canary-ft/conf/salm_uwb_atcc.yaml` (byte-identical, confirmed via `diff` before launch). LoRA `target_modules: [q_proj, v_proj]`, r=128, no SpecAugment, `weight_decay=1e-3`, `max_steps=10000`, 4×RTX 2080 Ti FSDP (`tensor_parallel_size=1, data_parallel_size=4`).
+
+Procedure: Launched via `setsid`/`nohup` with explicit `conda activate canary_ft` (per [[ENV-004]]). Monitored continuously via background `Monitor` watches on `val_loss` and completion/failure signatures — no manual polling. Verified completion via real evidence, not the printed message alone: clean process exit (`kill -0`/`pgrep`), 0 failure signatures in the full log, exact log line `` `Trainer.fit` stopped: `max_steps=10000` reached ``, and the final checkpoint (`step=10000-last.ckpt`, 5.5GB, all 4 FSDP shards + metadata present) confirmed on disk. Evaluated via the repo's own `models/canary-qwen/scripts/eval_finetuned.py` (unmodified), single GPU, inference-only, against the full UWB-ATCC test set (2,886 utterances) — the script's built-in NaN-weights check passed (0/1719 tensors NaN) before decoding began.
+
+Expected Result: A WER broadly consistent with the historically-cited 23.32% figure for this exact config, if the pipeline is correctly reproducible.
+
+Actual Result: **WER = 23.3210%** (`{"wer": 0.2332098511353502, "samples": 2886, "errors": 0}`, read directly from the eval script's output JSON, not the printed log) — matches the historically-cited 23.32% to within rounding. Training runtime: ~21 hours wall-clock (10,000 optimizer steps at ~1.69–1.70s/optimizer-step observed throughout, consistent start-to-finish, no slowdowns or stalls). Final training val_loss = 0.80481 (best during training was 0.69849, reached at an earlier checkpoint — the *final* checkpoint is not the *lowest-val_loss* checkpoint, worth noting for any future "best checkpoint" selection decision).
+
+Evidence: `stage2_v1equiv_eval_results.json`; `stage2_canary_v1equiv.log` (full training log, this session); `nvidia-smi`/`pgrep` checks throughout training and at completion; `~/canary-ft/experiments/checkpoints/step=10000-last.ckpt` (verified present, correct size/shard count).
+
+Result: **PASS** — this checkpoint is now the verified live control for Stage 3 (adaptation-scope, regularization) comparisons. Its close match to the historical figure also indirectly increases confidence that the pipeline itself (not just this one run) is sound — a relevant data point for [[ISS-009]]'s open question about the historical v3 checkpoint's provenance, though it does not resolve that question directly since v3 used different regularization settings.
+
+Limitations: Single run, single seed (1234, matching convention) — per the plan's statistical policy ([[EXP-010]]), repeated seeds are reserved for the final headline configuration only, not this control run. Training wall-clock (~21h) is ~4x the ~5.3h documented in the manuscript/repo docs for this exact config — this discrepancy remains unexplained and should be corrected in any redesigned manuscript's Table V; it does not affect the validity of this result, only the resource-planning estimates built on the old figure.
+
+Related Records: [[EXP-010]], [[ISS-009]], [[DEC-005]], [[ENV-004]]
+
+---
+
+## VAL-011 — Historical v3 checkpoint: config verified genuine (via embedded metadata), but WER does not reproduce the cited 20.70%
+
+Date: 2026-09-08
+Status: COMPLETE — surprising result, reproducibility gap identified
+
+Objective: Evaluate the surviving historical Canary-Qwen "v3" UWB-ATCC checkpoint ([[ISS-009]]) to obtain a real WER number, and resolve whether its training config actually matched the documented v3 recipe (the question [[ISS-009]] originally raised).
+
+Inputs / Configuration: `~/canary-ft/experiments/checkpoints_v3_HISTORICAL_BACKUP_20260422/step=10000-last.ckpt` (weights protected via directory rename before Stage 2 could overwrite them — timing verified safe). Config provenance re-established via `torch.load(.../meta.pt')['hyper_parameters']['cfg']` — the checkpoint's own embedded hyperparameters, not an external YAML file (which was found to be contaminated — see [[ISS-009]] correction).
+
+Procedure: (1) Loaded `meta.pt` directly with `torch`, extracted `hyper_parameters.cfg`, confirmed it matches the committed `salm_uwb_atcc_v3.yaml` recipe exactly (`lora_dropout=0.1`, `target_modules=[q_proj,v_proj]`, `spec_augment` present, `weight_decay=0.01`). (2) Ran the repo's own `models/canary-qwen/scripts/eval_finetuned.py` (unmodified) against this checkpoint, single GPU, full UWB-ATCC test set (2,886 utterances) — the script's built-in NaN-weights check passed first.
+
+Expected Result: WER close to the manuscript's cited 20.70% (Table I), given the config now confirmed to match.
+
+Actual Result: **WER = 23.3210%** (`{"wer": 0.2332098511353502, "samples": 2886, "errors": 0}`, read from the eval script's output JSON) — matching the plain LoRA-only baseline's WER (also 23.32%, see [[VAL-010]]), essentially identical to it, and **not** the manuscript's cited 20.70% for v3.
+
+Evidence: `historical_v3_eval_results.json`; `meta.pt` embedded hyperparameters (quoted in full in the corrected [[ISS-009]]); `historical_v3_eval.log`.
+
+Result: Config provenance question — **RESOLVED**, config matches documented v3 exactly. WER reproducibility question — **NOT RESOLVED, genuinely surprising**: a checkpoint with the verified-correct v3 training recipe does not reproduce the cited 20.70% figure; it reproduces the *un-regularized* baseline's WER instead, as if regularization had no effect on this specific checkpoint despite being present in its config.
+
+Candidate explanations, none yet verified:
+1. This may not actually be the specific checkpoint/run that produced the reported 20.70% figure — a different, still-undiscovered v3 run might exist (the "run_0"/"run_1" directories show at least 2 more historical Canary-Qwen runs existed with parameters not otherwise documented, e.g. `run_1`'s r=64 LoRA rank).
+2. The original 20.70% figure may have been computed with a different evaluation methodology than the current `eval_finetuned.py` (different decoding params, different manifest, different checkpoint selection — e.g. best-val-loss checkpoint rather than final step).
+3. SpecAugment/regularization, despite being present in the config, may not have actually been effective for some other reason (e.g. a training bug, or the `spec_augment` block being present in config but not actually wired into the forward pass — not yet checked in the perception module's actual `forward()`).
+4. The 20.70% figure itself may not be reliably reproducible/correct — this would be a serious finding for the redesigned manuscript.
+
+Limitations: This session only checked *that* the config matches, not whether `spec_augment` was actually applied during the forward pass (candidate explanation 3 is unverified). The `run_0`/`run_1` directories were not checkpoint-recoverable, so their actual results (if any) cannot be independently checked.
+
+**UPDATE (2026-09-08) — HuggingFace check resolves candidate explanation 1, deepens the finding:** the user pointed out (correctly — this was a real gap in the investigation, since README.md/REPLICATION_GUIDE.md were both read earlier this session but never re-consulted for this question) that trained models were uploaded to HuggingFace (`suideepmax/canary-qwen-2.5b-atc-lora`, `suideepmax/canary-qwen-2.5b-atc-unfrozen`, per README.md line 41 and REPLICATION_GUIDE.md lines 256-258). Downloaded and inspected the `canary-qwen-2.5b-atc-lora` repo directly via `huggingface_hub`:
+- It contains `v3_results.json` (`wer: 0.2070041846744872` = 20.70%) and `learning_curve_v3.json` — a genuine v3 result record — **but only one `consolidated_model.pt` file (5.85GB)**.
+- The repo's own `README.md` **Results table explicitly states the uploaded model is the plain LoRA baseline**: `"Canary-Qwen (LoRA) | 27.8M (0.97%) | 23.32%"`, and its own **Learning Curve table converges to 24.53% at step 10,000** — never approaching 20.70% at any point in training.
+- **Conclusion: no v3 model weights were ever uploaded to HuggingFace either.** The `v3_results.json`/`learning_curve_v3.json` files in that repo are orphaned result records from a different run, with no corresponding weights anywhere in the repo.
+
+**SUPERSEDED (2026-09-08) — see [[VAL-012]] for the final, correct resolution.** The "no surviving model" conclusion above was itself an artifact of a second methodology bug (a fixed-path caching collision in `eval_finetuned.py` when two evaluations were run in parallel — see [[VAL-012]]). Once isolated and re-run correctly, the v3 result **is** genuine and reproducible. This record is preserved for the audit trail (it correctly identified real problems — the config-file contamination in [[ISS-009]] — even though its final conclusion was wrong for a different reason). Do not cite the "no verifiable model" conclusion above; see [[VAL-012]].
+
+Related Records: [[ISS-009]], [[VAL-010]], [[VAL-012]], [[EXP-010]], [[DEC-005]]
+
+---
+
+## VAL-012 — FINAL RESOLUTION: v1/v2/v3 all verified genuine; the "23.32%" historical-checkpoint result was a caching-bug artifact
+
+Date: 2026-09-08
+Status: COMPLETE, RESOLVED
+
+Objective: Resolve the apparent v3 reproducibility gap raised in [[VAL-011]] by (a) checking whether trained models were uploaded to HuggingFace (a gap in the original investigation — the links were read earlier in this session but not re-checked), and (b) re-running all evaluations in strict isolation after discovering a second methodology bug.
+
+Root cause of the false "23.32%" historical-checkpoint result: `eval_finetuned.py` caches its consolidated model at a **fixed path** (`/tmp/canary_eval_consolidated.pt`) and skips re-consolidation `if os.path.exists(consolidated)`. Two evaluations were run in parallel on separate GPUs (Stage 2's fresh checkpoint, and the historical v3-config checkpoint); the second job found the first job's cache file already present and silently loaded its weights instead of its own. Proof: both runs' WER were bit-for-bit identical to 16 significant figures (0.2332098511353502) — only possible if both loaded the same weights.
+
+Procedure: (1) Deleted the stale `/tmp/canary_eval_consolidated.pt` cache; re-ran the historical checkpoint evaluation in isolation (no concurrent `eval_finetuned.py` job). (2) Independently downloaded `consolidated_model.pt` from both HuggingFace repos referenced in `README.md`/`REPLICATION_GUIDE.md` (`suideepmax/canary-qwen-2.5b-atc-lora`, `suideepmax/canary-qwen-2.5b-atc-unfrozen`) and ran real inference on each with a purpose-written script (`eval_consolidated.py`, no shared-cache risk since it loads directly with no intermediate consolidation step).
+
+Results (all against the full UWB-ATCC test set, 2,886 utterances, verified against output JSON files, not printed logs):
+
+| Source | Result |
+|---|---|
+| Local historical checkpoint, isolated re-eval | WER = 0.2070041846744872 (20.7004%) |
+| HuggingFace `canary-qwen-2.5b-atc-lora` repo, real inference | WER = 0.2070041846744872 (20.7004%) — **bit-for-bit identical** to the local re-eval |
+| Author's own `v3_results.json` in that same HF repo | WER = 0.2070041846744872 — matches both of the above exactly |
+| HuggingFace `canary-qwen-2.5b-atc-unfrozen` repo, real inference | WER = 0.2382177402757769 (23.8218%) — matches the manuscript's cited 23.82% |
+| Stage 2 fresh training + eval, this session ([[VAL-010]]) | WER = 0.2332098511353502 (23.3210%) — the genuine v1/baseline result |
+
+Evidence: `historical_v3_eval_results_CORRECTED.json`, `hf_lora_real_eval_results.json`, `hf_unfrozen_real_eval_results.json`, `stage2_v1equiv_eval_results.json` — all read directly, not from printed logs.
+
+Conclusion: **All three canonical results are genuine and independently verified.** v1 (LoRA baseline) = 23.32%, v2 (encoder unfrozen) = 23.82%, v3 (LoRA + regularization) = 20.70%. The user's original assertion that the 20.70% figure was not fabricated ("I recorded that after finishing training/inference") is fully vindicated with reproducible evidence, not just trust.
+
+**A related, separate, still-unresolved finding surfaced during this investigation**: the `canary-qwen-2.5b-atc-lora` HF repo's own `README.md` **incorrectly** labels the uploaded model as the plain baseline (23.32%, with a learning curve topping out at 24.53%) — but the actual uploaded weights are v3 (20.70%). This README is factually wrong and should be corrected if/when the repo is next touched. Separately, the `canary-qwen-2.5b-atc-unfrozen` repo's own `training_config.yaml` is byte-identical to the v1/baseline config (encoder shown frozen) despite the model measurably, reproducibly differing from v1 (23.82% vs 23.32%) — this is a **third independent instance** of the same "wrong config uploaded alongside correct weights" pattern (see [[ISS-007]], now updated). The true v2 hyperparameters remain unrecoverable from any file; only the WER result is trustworthy.
+
+**Also resolved**: `run_0`/`run_1`/`run_2` (three additional historical training attempts, log-only, no surviving checkpoints) are now fully mapped: `run_0` = lower-LR (1e-4) config, `run_1` = "research-optimized" r=64/4-projection LoRA (crashed with NaN at step 1500, per `PROGRESS.md`, never evaluable), `run_2` = "research-optimized v2" r=128/2-projection LoRA (produced the cited 60.46%). Per user decision (2026-09-08), the research-optimized ablation (both variants) is dropped from the active manuscript/research record — see [[DEC-007]]. The lower-LR config is retained and planned for a fresh, lower-priority retrain — see [[EXP-011]].
+
+Related Records: [[VAL-010]], [[VAL-011]], [[ISS-007]], [[ISS-009]], [[DEC-007]], [[EXP-011]]

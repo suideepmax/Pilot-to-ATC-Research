@@ -6,6 +6,7 @@ Initialized: 2026-09-06. All records below were recovered from existing reposito
 - AUD-001 — ATCOSIM gender/speaker-independent split: train/test speaker overlap (leakage confirmed)
 - AUD-002 — UWB-ATCC / ATCOSIM data split and format audit (as documented)
 - AUD-003 — Documentation self-consistency corrections (WER metric naming, encoder-unfrozen param %)
+- AUD-004 — Full repo structure/scripts/docs audit + hardware/software efficiency review (script convention split, stale 32.8% instance, SETUP.md gap, stale Phase 4 docs)
 
 ## Validation
 - VAL-001 — UWB-ATCC W2V2-large final checkpoint beats paper baseline (14.54%/12.69% vs paper 17.48-17.56%/13.72-14.26%)
@@ -15,12 +16,21 @@ Initialized: 2026-09-06. All records below were recovered from existing reposito
 - VAL-005 — EXP-007 final preflight validation (manifests/config/output-safety/resource plan) — PASS
 - VAL-006 — EXP-007 female run completion verification (real evidence) — PASS, WER=4.8468%
 - VAL-007 — EXP-007 male run completion verification (real evidence) — PASS, WER=19.973%
+- VAL-008 — Canary-Qwen N-best generation feasibility confirmed via source-code inspection (SALM.generate → HF GenerationConfig pass-through)
+- VAL-009 — Spike D: full Canary-Qwen decoder fine-tuning fits in VRAM on 4×RTX 2080 Ti — GO, empirically confirmed (1-step smoke test)
+- VAL-010 — Stage 2 fresh v1-equivalent control checkpoint trained + evaluated — WER=23.32%, matches historical figure exactly, now the live control for Stage 3
+- VAL-011 — SUPERSEDED by VAL-012 — apparent "no surviving v3 model" conclusion was itself caused by a caching-bug artifact, not a real problem
+- VAL-012 — FINAL: v1 (23.32%), v2 (23.82%), v3 (20.70%) all verified genuine via real inference, cross-checked against independent HuggingFace downloads and author's own result records — root cause of earlier confusion was a fixed-path caching collision in eval_finetuned.py
 
 ## Decisions
 - DEC-001 — Discard ATCOSIM gender-based WER results; require a re-split for speaker independence
 - DEC-002 — Canonicalize "greedy" vs "beam search" terminology and pick single canonical UWB-ATCC WER numbers
 - DEC-003 — Use torchrun/DDP instead of paper's DataParallel launcher for W2V2-large training
 - DEC-004 — Use FSDP (ModelParallelStrategy) instead of DDP for Canary-Qwen-2.5B training
+- DEC-005 — Redesign research question around Canary-Qwen decoder-adaptation-scope study, drop "unseen domain"/architecture-vs-architecture framing (IEEE SLT review response)
+- DEC-006 — Drop data-scale and cross-corpus studies from the P0/P1 execution-ready program (focus discipline)
+- DEC-007 — Drop the ambiguous "research-optimized" (3e-5) Canary-Qwen ablation from the active manuscript/research record
+- DEC-008 — Rename Canary-Qwen UWB-ATCC configs/scripts/results to canonical v1/v2/v3 scheme
 
 ## Experiments
 - EXP-001 — UWB-ATCC W2V2-large fine-tuning (Phase 4) — 14.54%/12.69% WER [COMPLETE]
@@ -31,14 +41,20 @@ Initialized: 2026-09-06. All records below were recovered from existing reposito
 - EXP-006 — Canary-Qwen-2.5B v3 (LoRA+SpecAugment) on ATCOSIM — 3.33% WER [COMPLETE]
 - EXP-007 — ATCOSIM speaker-independent re-training (train_male/train_female) [COMPLETE 2026-09-07 — female WER=4.8468%, male WER=19.973%; large gender gap flagged as unexplained]
 - EXP-008 — UWB-ATCC W2V2 dropout/mask_time_prob ablations [PROPOSED, not executed]
+- EXP-009 — IEEE SLT review-response: Canary-Qwen decoder-adaptation-scope study [PROPOSED, not executed — see research_report/IEEE_REVIEW_RESPONSE_RESEARCH_PLAN.md; superseded by EXP-010's execution-ready version]
+- EXP-010 — Execution-ready adaptive research program (staged, gated, GPU-hour-minimizing) [PROPOSED, not executed — see research_report/FINAL_RESEARCH_PROGRAM.md]
+- EXP-011 — Re-run lower-LR (1e-4) Canary-Qwen UWB-ATCC ablation [PROPOSED, LOW PRIORITY, not executed — checkpoint lost, no citation-verified replacement yet]
 
 ## Issues
 - ISS-001 — ATCOSIM gender-subset evaluation has train/test speaker leakage [RESOLVED by discarding]
 - ISS-002 — eval_model.py hypothesis-file bug when no LM is supplied [RESOLVED — documented workaround]
 - ISS-003 — fp16 training NaN with small AdamW epsilon on Canary-Qwen FSDP [RESOLVED — eps=1e-4]
-- ISS-004 — Stale trainable-param % (32.8 vs 29.2) in finetuned_results_unfrozen.json [OPEN]
+- ISS-004 — Stale trainable-param % (32.8 vs 29.2) in finetuned_results_v2.json [RESOLVED 2026-09-08]
 - ISS-005 — Existing ATCOSIM 4-gram KenLM trained on leaked split; must not be used for speaker-independent decoding [OPEN]
 - ISS-006 — ATCOSIM wrapper scripts lack `set -e`, silently report success after DDP ranks crash [RESOLVED — workaround, script not fixed]
+- ISS-007 — Canary-Qwen v2 (encoder-unfrozen) config unresolved — WER=23.82% verified genuine via HF inference, but exact hyperparameters unrecoverable from any of 3 independent config sources checked [PARTIALLY RESOLVED]
+- ISS-008 — No gender-stratified Canary-Qwen lhotse cuts exist yet for ATCOSIM speaker-independent evaluation [OPEN]
+- ISS-009 — FULLY RESOLVED (2026-09-08): v3 checkpoint's config AND WER both verified genuine (20.70%, matches HF + author's own record). Earlier "doesn't reproduce" conclusion was a caching-bug artifact [see VAL-012]
 
 ## Environment
 - ENV-001 — System hardware (4x RTX 2080 Ti, 11GB each, no sudo, Ubuntu 24)
