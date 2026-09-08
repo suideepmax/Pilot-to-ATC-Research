@@ -108,24 +108,26 @@ Model: nvidia/canary-qwen-2.5b (2.87B total params), SALM architecture (FastConf
 
 Hardware: 4x RTX 2080 Ti.
 
+**RENAMED (2026-09-08, [[DEC-008]]):** runs below are now referred to by the canonical v1/v2/v3 scheme (matching `salm_uwb_atcc_v1/v2/v3.yaml`, `train_canary_v1/v2/v3.sh`), not the original "Run N" numbering. All three WER numbers were independently re-verified via real inference this session — see [[VAL-012]]. The "research-optimized" runs (formerly Run 4/5) are **dropped** from the active record per [[DEC-007]] — retained below only for historical completeness, not as part of the canonical comparison.
+
 Runs (all 10,000 steps except where noted), per models/canary-qwen/docs/PROGRESS.md:
 
 | Run | Config | Trainable params | WER | val_loss best |
 |---|---|---|---|---|
-| 1 — Original LoRA | lr=5e-4, warmup=1000, dropout=0.01, no SpecAugment, WD=1e-3 | 27.8M (0.97%) | 23.32% | 0.678 |
-| 2 — Encoder Unfrozen | same as Run 1 + FastConformer encoder unfrozen | 838.8M (29.2%; corrected from 32.8%, see [[AUD-003]]) | 23.82% | 0.649 |
-| 3 — Lower LR | lr=1e-4 | 27.8M | 32.58% | 0.762 (overfits after step 2500, val_loss rises to 1.109 by 10k) |
-| 4 — Research-optimized (r=64) | lr=3e-5, r=64, 2500 steps | n/a | FAILED (NaN at step 1500, eps=1e-6 too small; also r=64 vs pretrained r=128 mismatch prevented eval) | — |
-| 5 — Research-optimized v2 (r=128) | lr=3e-5, r=128, 2500 steps | 27.8M | 60.46% | 1.419 (still decreasing — too few steps at this LR) |
-| 6 — v3 (best) | lr=5e-4, warmup=1000, dropout=0.1, SpecAugment ON (2 freq masks, 10 time masks), WD=1e-2, LoRA r=128/alpha=256 on q_proj+v_proj | 27.8M (0.97%) | **20.70%** | 0.581 |
+| **v1 — LoRA baseline** (formerly "Run 1 — Original LoRA") | lr=5e-4, warmup=1000, dropout=0.01, no SpecAugment, WD=1e-3 | 27.8M (0.97%) | 23.32% (re-verified [[VAL-010]]) | 0.678 |
+| **v2 — Encoder Unfrozen** (formerly "Run 2") | same as v1 + FastConformer encoder unfrozen (**config to reproduce this is unresolved — see [[ISS-007]]**) | 838.8M (29.2%; corrected from 32.8%, see [[AUD-003]]) | 23.82% (re-verified via HF inference, [[VAL-012]]) | 0.649 |
+| Lower LR (not part of v1/v2/v3; checkpoint lost, planned re-run [[EXP-011]]) | lr=1e-4 | 27.8M | 32.58% (citation only, not re-verified) | 0.762 (overfits after step 2500, val_loss rises to 1.109 by 10k) |
+| ~~Research-optimized (r=64)~~ — **DROPPED, [[DEC-007]]** | lr=3e-5, r=64, 2500 steps | n/a | FAILED (NaN at step 1500, eps=1e-6 too small; also r=64 vs pretrained r=128 mismatch prevented eval) | — |
+| ~~Research-optimized v2 (r=128)~~ — **DROPPED, [[DEC-007]]** | lr=3e-5, r=128, 2500 steps | 27.8M | 60.46% | 1.419 (still decreasing — too few steps at this LR) |
+| **v3 — LoRA + Regularization (best)** (formerly "Run 6") | lr=5e-4, warmup=1000, dropout=0.1, SpecAugment ON (2 freq masks, 10 time masks), WD=1e-2, LoRA r=128/alpha=256 on q_proj+v_proj | 27.8M (0.97%) | **20.70%** (re-verified twice, [[VAL-012]]) | 0.581 |
 
-Metrics (learning curve at step 10,000 unless noted, 500-sample eval subset): Run 1 (orig): 24.53%; Run 2 (unfrozen): 23.89%; Run 6 (v3): 22.30% (500-sample); full test-set (2,886 samples) v3 = 20.70% (`v3_results.json`).
+Metrics (learning curve at step 10,000 unless noted, 500-sample eval subset): v1: 24.53%; v2 (unfrozen): 23.89%; v3: 22.30% (500-sample); full test-set (2,886 samples) v3 = 20.70% (`finetuned_results_v3.json`, formerly `v3_results.json`).
 
-Conclusion: The ~24% WER plateau (Runs 1-2) was caused by overfitting on the small (10.5h) training set, not by the frozen LLM decoder being an architectural bottleneck — Run 6 (v3) broke through to 20.70% purely via added regularization (SpecAugment + 10x dropout + 10x weight decay) at the same LR. Unfreezing the encoder (29.2% of params) without regularization did not beat LoRA alone (0.97% of params): 23.82% vs 23.32%. Learning rate must stay high (5e-4); both lower-LR variants (Runs 3, 5) underperformed.
+Conclusion: The ~24% WER plateau (v1/v2) was caused by overfitting on the small (10.5h) training set, not by the frozen LLM decoder being an architectural bottleneck — v3 broke through to 20.70% purely via added regularization (SpecAugment + 10x dropout + 10x weight decay) at the same LR. Unfreezing the encoder (29.2% of params, v2) without regularization did not beat LoRA alone (0.97% of params, v1): 23.82% vs 23.32%. Learning rate must stay high (5e-4); the lower-LR variant underperformed (dropped variants excluded from this conclusion per [[DEC-007]]).
 
-Next Action: None outstanding — v3 is the adopted best config for UWB-ATCC and was reused as-is for the ATCOSIM v3 run (see [[EXP-006]]).
+Next Action: v3 is the adopted best config for UWB-ATCC and was reused as-is for the ATCOSIM v3 run (see [[EXP-006]]). Outstanding: v2's exact reproducing config remains unresolved ([[ISS-007]]) — worth a fresh, correctly-configured retrain if a config-verified v2 result is needed (not yet scheduled, see this session's discussion). Lower-LR retrain planned at low priority ([[EXP-011]]).
 
-Related Records: [[ISS-003]], [[DEC-004]], [[AUD-003]], [[VAL-003]]
+Related Records: [[ISS-003]], [[ISS-007]], [[DEC-004]], [[DEC-007]], [[DEC-008]], [[AUD-003]], [[VAL-003]], [[VAL-012]]
 
 ---
 
