@@ -358,3 +358,32 @@ Conclusion: The fairness fix closes only ~1.5 WER points, most of it from beam s
 Next Action: Report this comparison in the manuscript's decoding-fairness section; no further action needed unless a reviewer requests dev-set-tuned alpha.
 
 Related Records: [[VAL-013]], [[VAL-008]], [[VAL-010]], [[DEC-002]]
+
+## EXP-013 — S4-FAIR: decoding-fairness comparison (N-best + in-domain KenLM on Canary-Qwen v3)
+
+Date: 2026-09-08
+Status: COMPLETE
+
+Objective: Repeat EXP-012's decoding-fairness comparison on the v3 (regularized) checkpoint, the manuscript's headline result.
+
+Hypothesis: Same as EXP-012 — external KenLM should meaningfully help if the fairness asymmetry drives the WER gap.
+
+Dataset: UWB-ATCC full test set (2,886 utterances).
+
+Model: Canary-Qwen v3 checkpoint ([[VAL-012]]), 5-beam/5-best generation.
+
+Configuration: Same `generate_nbest.py`/`rescore_kenlm.py` as EXP-012, unmodified.
+
+Hardware: 1x RTX 2080 Ti (inference-only).
+
+Estimated Cost: ~0 GPU-hours.
+
+Actual Runtime: ~30 minutes generation + seconds rescoring.
+
+Results: See [[VAL-014]]. v3 native greedy 20.70% -> 5-beam 19.42% -> +KenLM (alpha=0.5) 20.14% (WORSE than beam alone). Best point in the sweep (alpha=0.1, 19.44%) is a tie with no-LM beam search, not an improvement.
+
+Conclusion: Unlike v1 (EXP-012), KenLM provides no benefit to v3 and is actively harmful at the pre-registered headline alpha. All of v3's improvement over greedy comes from beam search. Reported honestly rather than substituting a post-hoc favorable alpha.
+
+Next Action: None required — this negative result stands as reported. Worth noting in the manuscript that decoding-fairness correction does not help the regularized configuration.
+
+Related Records: [[VAL-014]], [[EXP-012]], [[VAL-012]]
