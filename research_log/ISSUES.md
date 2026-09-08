@@ -175,3 +175,27 @@ Mitigation: Relaunched by explicitly sourcing conda and activating `w2v2_asr` pl
 Resolution: Retlaunch succeeded — 4 DDP rank processes confirmed alive on GPUs 0-3 via `ps`/`nvidia-smi` (100% util on 3/4 GPUs, transient 0% on the 4th consistent with dataloader activity) after the environment fix. Underlying `set -e` gap in the wrapper scripts remains unresolved in the scripts themselves (not modified, per instruction) — recommended future fix: add `set -euo pipefail` to `ablations/atcosim/train_w2v2_large-60v*.sh`.
 
 Related Records: [[EXP-007]], [[VAL-004]], [[VAL-005]], [[ENV-004]]
+
+---
+
+## ISS-010 — Two live hazards found in an independent re-audit of the v1/v2/v3 rename: v1/v3 checkpoint-dir collision, and a stale destructive `rm -rf` in REPLICATION_GUIDE.md
+
+Date: 2026-09-08
+Status: OPEN (documented only, nothing modified — read-only audit per instruction)
+Severity: HIGH (one is a data-loss risk to surviving checkpoints; the other blocks reproducing v1/v2 from a clean checkout without undocumented tribal knowledge)
+
+Description: An independent, skeptical re-audit (requested explicitly, not trusting prior session summaries — see [[AUD-005]]) of the DEC-008 v1/v2/v3 rename and same-day v2 encoder-unfreeze fix found the rename/fix themselves to be correct (v1-vs-v3 regularization-only, v2-vs-v1 encoder-unfreeze-only, both verified via `diff`), but surfaced two hazards not previously recorded:
+
+(1) **v1/v3 checkpoint collision, framework-confirmed.** `salm_uwb_atcc_v1.yaml` and `salm_uwb_atcc_v3.yaml` both set `explicit_log_dir: /home/kotasthane/canary-ft/experiments/` (identical). Reading NeMo's `exp_manager.py::check_explicit_log_dir` confirms `exp_dir`/`name`/`version` are ignored whenever `explicit_log_dir` is set — checkpoints land flatly in `<explicit_log_dir>/checkpoints/` regardless of `name`. So v1 and v3 currently target the exact same output directory; training either one after the other (without a manual backup) silently overwrites the other's checkpoints and `exp_config.yaml`. Only v2 was fixed to use an isolated directory (`experiments_v2/`); v1/v3 were not. This is the same failure mode already documented once for a different run pair in [[ISS-009]].
+
+(2) **Wrapper-script/runtime-config desync + stale destructive doc command.** `train_canary_v1.sh` and `train_canary_v2.sh` pass `--config-path=/home/kotasthane/canary-ft/conf`, a separate non-git directory that (at audit time) does not contain `salm_uwb_atcc_v1.yaml` or `salm_uwb_atcc_v2.yaml` under those names — only the pre-rename filenames (`salm_uwb_atcc.yaml`, `salm_uwb_atcc_unfrozen.yaml`) exist there, unchanged since before DEC-008. Root cause: the rename (commit 7764ab9) renamed files in the git repo and updated the `.sh` files' `--config-name` flags, but never re-deployed the renamed files into `~/canary-ft/conf/`. `REPLICATION_GUIDE.md` §2.9/2.11/2.11b documents the required manual `cp <repo file> ~/canary-ft/conf/` step, so the wrapper scripts are not meant to run standalone — but nothing in the `.sh` files says so, and running them directly today would fail immediately (cheap Hydra "missing primary config" error, no GPU cost) for v1/v2 (v3 currently still works since its `~/canary-ft/conf/` copy happens to be current). Separately, and more seriously: `REPLICATION_GUIDE.md` §2.11 still contains `rm -rf ~/canary-ft/experiments/checkpoints/*` right before the v2 training command, written back when v2 shared v1's directory. This line was not updated when v2.yaml's `explicit_log_dir` was moved to `experiments_v2/` today — it is now pointless for its original purpose AND, per hazard (1) above, would delete both v1's and v3's live checkpoints if anyone follows the guide literally.
+
+Evidence: `nemo/utils/exp_manager.py` (`check_explicit_log_dir`, ~line 1099-1109: "exp_dir, name, and version will be ignored"); `test -e ~/canary-ft/conf/salm_uwb_atcc_v{1,2}.yaml` → both MISSING; `md5sum` showing `~/canary-ft/conf/salm_uwb_atcc.yaml`/`salm_uwb_atcc_unfrozen.yaml` unchanged (still frozen-encoder, still identical to each other); `git show 7764ab9 -- models/canary-qwen/scripts/`; `REPLICATION_GUIDE.md` lines 165-210 (manual `cp` steps, and the `rm -rf` at line 188).
+
+Impact: (1) risks silently destroying v1 or v3's surviving checkpoint the next time either config is retrained (e.g. for [[EXP-011]] or any future ablation re-run). (2) blocks a clean reproduction of v1/v2 via the `.sh` wrapper alone (must additionally consult `REPLICATION_GUIDE.md`); the guide's own v2 instructions currently recommend a command that would cause the exact collision described in (1) for no remaining benefit.
+
+Mitigation: None applied — read-only audit per task instruction. Recommended fixes (not yet done): give v1 (or v3) its own `explicit_log_dir` the same way v2 was fixed; remove or correct the stale `rm -rf` line in `REPLICATION_GUIDE.md` §2.11; either add a `cp`-and-check step inside `train_canary_v1.sh`/`v2.sh` themselves or add a header comment pointing at the `REPLICATION_GUIDE.md` prerequisite so the scripts aren't silently non-functional in isolation.
+
+Resolution: Not resolved.
+
+Related Records: [[AUD-005]], [[ISS-007]], [[ISS-009]], [[DEC-008]]

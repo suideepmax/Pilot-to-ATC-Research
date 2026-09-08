@@ -104,8 +104,16 @@ data:
     shard_seed: "randomized"
 
 exp_manager:
+  # Deliberately isolated from v1's ~/canary-ft/experiments/ (see ISS-010,
+  # research_log/ISSUES.md, 2026-09-08): v3 previously shared v1's
+  # explicit_log_dir, which NeMo's exp_manager resolves to the SAME flat
+  # <explicit_log_dir>/checkpoints/ path regardless of `name` -- an
+  # independent audit confirmed this via direct read of
+  # nemo/utils/exp_manager.py::check_explicit_log_dir. This is the exact
+  # collision that already silently overwrote a checkpoint once this session
+  # (ISS-009). Only v2 was fixed at the time; this closes the same gap for v3.
   exp_dir: null
-  explicit_log_dir: /home/kotasthane/canary-ft/experiments/
+  explicit_log_dir: /home/kotasthane/canary-ft/experiments_v3/
   name: canary_uwb_atcc_v3
   create_tensorboard_logger: false
   create_checkpoint_callback: true

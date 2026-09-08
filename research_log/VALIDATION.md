@@ -138,7 +138,7 @@ Related Records: [[VAL-004]], [[EXP-007]], [[ISS-001]], [[DEC-003]], [[ISS-005]]
 Date: 2026-09-07
 Status: PASS
 
-Objective: Verify the EXP-007 female training run actually completed successfully before starting the male run, per [[ISS-006]] (wrapper scripts print "Done training"/"Training complete" even after a crash) and the completion-detection rules in the training-monitor skill.
+Objective: Verify the EXP-007 female training run actually completed successfully before starting the male run, per [[ISS-006]] (wrapper scripts print "Done training"/"Training complete" even after a crash), using deterministic completion-detection rather than the wrapper's own printed message.
 
 Procedure: Deterministic checks against the actual log and output directory, not the wrapper's printed message alone: (a) `pgrep` for any surviving training process; (b) full-log grep for `Traceback`/`CUDA out of memory`/`ChildFailedError`/`FAILED`; (c) `grep -c "Process rank:"` to confirm all 4 DDP ranks logged in (not a silent fallback to fewer); (d) final `epoch`/step count in the log; (e) presence of a checkpoint directory and `eval_results.json`/`train_results.json`/`trainer_state.json` in the output directory; (f) reading the actual metric values from `eval_results.json`.
 
