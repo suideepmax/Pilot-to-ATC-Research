@@ -327,3 +327,34 @@ Results: N/A — not executed.
 Next Action: Await explicit approval, scheduled after [[EXP-010]]'s higher-priority items.
 
 Related Records: [[VAL-012]], [[EXP-010]], [[DEC-007]]
+
+## EXP-012 — S4-FAIR: decoding-fairness comparison (N-best + in-domain KenLM on Canary-Qwen)
+
+Date: 2026-09-08
+Status: COMPLETE
+
+Objective: Resolve reviewer complaint that the manuscript compared W2V2+KenLM against Canary-Qwen native decoding (apples-to-oranges) by decoding Canary-Qwen with the same in-domain KenLM, via N-best generation + rescoring.
+
+Hypothesis: If the fairness asymmetry is a major driver of the W2V2-Canary WER gap, giving Canary-Qwen the same KenLM should close most of the gap. If adaptation scope is the real driver, KenLM should barely move Canary-Qwen's WER.
+
+Dataset: UWB-ATCC full test set (2,886 utterances).
+
+Model: Canary-Qwen v1 checkpoint ([[VAL-010]]), 5-beam/5-best generation.
+
+Configuration: `generate_nbest.py` (5-beam, `output_scores=True`), `rescore_kenlm.py` (KenLM fusion, alpha grid, headline alpha=0.5 matching W2V2's own pyctcdecode default).
+
+Hardware: 1× RTX 2080 Ti (inference-only).
+
+Command: `python generate_nbest.py --checkpoint step=10000-last.ckpt --test-manifest test_manifest.json --num-beams 5` then `python rescore_kenlm.py --nbest nbest_v1_full.json --kenlm uwb_atcc_4g.binary`.
+
+Estimated Cost: ~0 GPU-hours (inference-only, ~30 minutes wall-clock).
+
+Actual Runtime: ~30 minutes (generation) + seconds (rescoring).
+
+Results: See [[VAL-013]] for full table. Headline: Canary-Qwen v1 native 23.32% -> 5-beam 22.28% -> +KenLM (alpha=0.5) 21.79%. W2V2: 14.54% native / 12.69% +KenLM.
+
+Conclusion: The fairness fix closes only ~1.5 WER points, most of it from beam search rather than the LM itself. The W2V2-Canary gap is not substantially explained by the decoding-fairness asymmetry, supporting the manuscript's adaptation-scope framing.
+
+Next Action: Report this comparison in the manuscript's decoding-fairness section; no further action needed unless a reviewer requests dev-set-tuned alpha.
+
+Related Records: [[VAL-013]], [[VAL-008]], [[VAL-010]], [[DEC-002]]
