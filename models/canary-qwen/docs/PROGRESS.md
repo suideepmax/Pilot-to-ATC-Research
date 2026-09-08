@@ -21,35 +21,35 @@
 
 ## Results
 
+Naming convention (as of 2026-09-08): the three canonical, actively-maintained runs are **v1** (LoRA baseline), **v2** (encoder unfrozen), **v3** (LoRA + regularization, best result) — matching `salm_uwb_atcc_v1/v2/v3.yaml` and `train_canary_v1/v2/v3.sh`. All three WER numbers below were independently re-verified via real inference on 2026-09-08 (not just cited from earlier records) — see `research_log/VALIDATION.md` VAL-010/VAL-011.
+
 ### Zero-Shot Baseline
 WER: 81.49% (no fine-tuning)
 
-### Run 1: Original LoRA (lr=5e-4, 10k steps)
+### v1: LoRA baseline (lr=5e-4, 10k steps)
 WER: 23.32% | val_loss best: 0.678
 Hyperparameters: lr=5e-4, warmup=1000, dropout=0.01, no SpecAugment, WD=1e-3
+Verified 2026-09-08 via a fresh training run (not just the historical record) — reproduced to within rounding. **Actual training time: ~21 hours** on 4x RTX 2080 Ti (not ~5.3 hours as earlier documented — that figure was wrong).
 
-### Run 2: Encoder Unfrozen (838.8M params, 29.2%)
+### v2: Encoder Unfrozen (838.8M params, 29.2%)
 WER: 23.82% | val_loss best: 0.649
-Same hyperparameters as Run 1, but FastConformer encoder unfrozen.
-Training 30x more parameters did not improve WER.
+Documented hyperparameters: same as v1 but FastConformer encoder unfrozen. **However, both the committed config and the config uploaded alongside the published HuggingFace model are byte-identical to v1's config (encoder still shown frozen on paper) — the true hyperparameters that produced this measurable, reproducible 23.82% result are not currently recoverable from any file.** Only the WER number is verified (via real inference against the published model); the config should not be trusted to reproduce it. See `research_log/ISSUES.md` ISS-007.
+Training 29.2% of parameters did not improve WER over v1's 0.97%.
 
-### Run 3: Lower LR (lr=1e-4, 10k steps)
-WER: 32.58% | val_loss best: 0.762
+### Lower LR (lr=1e-4, 10k steps) — checkpoint lost, not part of the v1/v2/v3 set
+WER: 32.58% (historical citation only, not independently re-verified)
 Overfits after step 2500, val_loss rises to 1.109 by step 10k.
+No surviving checkpoint anywhere (local disk or HuggingFace) — config survives locally as `~/canary-ft/conf/salm_uwb_atcc_lr1e4.yaml` (not committed to GitHub). **Planned for a fresh, lower-priority retrain** — see `research_log/EXPERIMENTS.md`.
 
-### Run 4: Research-optimized (lr=3e-5, r=64, 2500 steps)
-Failed: NaN at step 1500 (eps=1e-6 too small for fp16)
-Could not evaluate due to r=64 vs pretrained r=128 mismatch.
+### Research-optimized ablations — removed from the active record (2026-09-08)
+Two lr=3e-5 variants were previously attempted (r=64/4-projection LoRA, which NaN'd at step 1500 and was never evaluable; and r=128/2-projection, which reached 60.46% WER but never converged in the 2,500-step budget). Per user decision, these are dropped from the manuscript and active research record — neither has a surviving checkpoint, and they are not considered part of the core v1/v2/v3 comparison going forward.
 
-### Run 5: Research-optimized v2 (lr=3e-5, r=128, 2500 steps)
-WER: 60.46% | val_loss: 1.419 (still decreasing)
-Too few steps at this LR to converge.
-
-### Run 6: v3 - Original LR + Regularization (best result)
+### v3: LoRA + Regularization (best result)
 WER: 20.70% | val_loss best: 0.581
 Hyperparameters: lr=5e-4, warmup=1000, dropout=0.1, SpecAugment ON, WD=1e-2
-Same LR as Run 1, but with SpecAugment, 10x dropout, 10x weight decay.
-Broke through the 24% plateau. Config: salm_uwb_atcc_v3.yaml
+Same LR as v1, but with SpecAugment, 10x dropout, 10x weight decay.
+Broke through the 24% plateau. Config: `salm_uwb_atcc_v3.yaml`.
+**Verified twice on 2026-09-08**: the surviving local checkpoint (re-evaluated in isolation after an earlier evaluation was contaminated by a caching bug) and an independently-downloaded copy from the published HuggingFace model both gave bit-for-bit identical WER (0.2070041846744872) — this result is genuine and reproducible.
 
 ## Learning Curves (500 test samples)
 
@@ -64,15 +64,15 @@ Broke through the 24% plateau. Config: salm_uwb_atcc_v3.yaml
 | 7,500 | 23.81% | 24.53% | 24.12% |
 | 10,000 | 22.30% | 24.53% | 23.89% |
 
-v3 converges faster than the original at every step after 500, and keeps improving where the original plateaued.
+v3 converges faster than v1 at every step after 500, and keeps improving where v1 plateaued.
 
 ## Key Findings
 
-1. The 24% WER plateau in Runs 1-2 was caused by overfitting, not the frozen decoder. Adding regularization (SpecAugment + dropout + weight decay) cut WER from 23.32% to 20.70%.
+1. The 24% WER plateau in v1/v2 was caused by overfitting, not the frozen decoder. Adding regularization (SpecAugment + dropout + weight decay) cut WER from 23.32% to 20.70%.
 
 2. LoRA (0.97% params) with proper regularization outperforms unfreezing the encoder (29.2% params) without it: 20.70% vs 23.82%.
 
-3. Learning rate must stay high (5e-4) for LoRA on small ATC data. Lower LR (1e-4, 3e-5) converges too slowly or overfits differently.
+3. Learning rate must stay high (5e-4) for LoRA on small ATC data. Lower LR (1e-4) converges too slowly or overfits differently (citation only — not independently re-verified, checkpoint lost).
 
 4. NVIDIA's default SALM config has minimal regularization because it was designed for 234k hours. Fine-tuning on 10 hours requires SpecAugment, dropout=0.1, and weight_decay=1e-2.
 

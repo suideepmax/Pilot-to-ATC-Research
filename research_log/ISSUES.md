@@ -61,20 +61,18 @@ Related Records: [[ENV-003]], [[EXP-004]]
 ## ISS-004 — Stale trainable-param percentage in finetuned_results_unfrozen.json
 
 Date: 2026-09-06 (recovered during this audit)
-Status: OPEN (flagged only, not modified — instructed not to alter existing research documentation/results)
+Status: **RESOLVED (2026-09-08)**
 Severity: LOW
 
-Description: `models/canary-qwen/docs/finetuned_results_unfrozen.json` stores `"params_trained_pct": 32.8`, the pre-correction value. Commit 054bd54 corrected the same figure (838.8M / 2,870M = 29.2%) everywhere in Markdown docs (REPLICATION_GUIDE.md, models/canary-qwen/docs/PROGRESS.md, shared/model_comparison.md) but did not touch this JSON file.
+Description: `models/canary-qwen/docs/finetuned_results_unfrozen.json` (renamed to `finetuned_results_v2.json` as part of [[DEC-008]]'s v1/v2/v3 rename) stored `"params_trained_pct": 32.8`, the pre-correction value. Commit 054bd54 corrected the same figure (838.8M / 2,870M = 29.2%) everywhere in Markdown docs (REPLICATION_GUIDE.md, models/canary-qwen/docs/PROGRESS.md, shared/model_comparison.md) but did not touch this JSON file. `AUD-004` also found the same stale value in `train_canary_unfrozen.sh`'s header comment.
 
 Evidence: `cat models/canary-qwen/docs/finetuned_results_unfrozen.json` → `"params_trained_pct": 32.8`; contrast with [[AUD-003]] / commit 054bd54.
 
-Impact: Any future script or reader that consumes the JSON file directly (rather than the Markdown docs) will pick up the superseded 32.8% figure.
+Impact: Any future script or reader that consumes the JSON file directly (rather than the Markdown docs) would pick up the superseded 32.8% figure.
 
-Mitigation: None applied — recorded here per instruction not to modify existing files during this audit.
+Mitigation/Resolution: Fixed 2026-09-08 while the file was already being touched for the v1/v2/v3 rename ([[DEC-008]]) — `params_trained_pct` corrected to 29.2 in `finetuned_results_v2.json`. The corresponding script comment (`train_canary_v2.sh`, formerly `train_canary_unfrozen.sh`) was also rewritten and no longer states a trainable-param percentage in a way that could go stale the same way.
 
-Resolution: Not resolved. Recommended next action: update the JSON's `params_trained_pct` to 29.2 in a future, explicitly-scoped edit.
-
-Related Records: [[AUD-003]]
+Related Records: [[AUD-003]], [[AUD-004]], [[DEC-008]]
 
 ---
 
@@ -95,6 +93,66 @@ Mitigation: None applied yet. A leakage-free 4-gram LM for gender-subset eval wo
 Resolution: Not resolved — flagged for awareness before any future LM-fusion step is added to EXP-007 or its successors. No script, model, or result file was modified to produce this record.
 
 Related Records: [[ISS-001]], [[EXP-007]], [[VAL-005]]
+
+---
+
+## ISS-007 — Canary-Qwen "encoder unfrozen" config does not match the manuscript's claim for that ablation
+
+Date: 2026-09-07
+Status: OPEN (documented only — checkpoints lost, cannot be independently re-verified)
+Severity: HIGH (a manuscript-cited result cannot currently be reproduced or verified)
+
+Description: The submitted manuscript (`Final_Draft.md`, Table I / Sec. VI.B) reports a Canary-Qwen UWB-ATCC ablation with the encoder unfrozen: 838.8M/2,870M (29.2%) trainable params, WER 23.82%, with a distinct learning-curve trajectory in Table III. The GitHub-committed config file that should document this run, `models/canary-qwen/scripts/salm_uwb_atcc_unfrozen.yaml`, is MD5-identical to the frozen baseline `salm_uwb_atcc.yaml` — both currently freeze `^perception\.encoder\..+$`, meaning the committed "unfrozen" config does not actually unfreeze the encoder.
+
+Evidence: `md5sum salm_uwb_atcc.yaml salm_uwb_atcc_unfrozen.yaml` → identical hash `8d3cd6e7a6dafa03ded133d46f7ca42c`; manuscript Table I/III and Sec. VI.B text describing the 838.8M-param unfrozen run.
+
+Impact: The 23.82% WER / 838.8M-param result cannot currently be reproduced from the repository. Original checkpoints are lost (per user statement), so the claim cannot be independently verified against ground truth either. The result's internal plausibility (a distinct, non-trivial learning-curve trajectory) argues against outright fabrication, but this is a judgment call, not a verified fact.
+
+Mitigation: **UPDATE (2026-09-08):** the WER result itself (23.82%) is now independently verified via real inference against the HuggingFace-hosted model — see [[VAL-012]]. The config-provenance problem is confirmed to be a **third independent instance** of the same pattern: the `training_config.yaml` uploaded alongside that same HF model is *also* byte-identical to the v1/baseline config (encoder shown frozen), despite the model measurably, reproducibly differing from v1. The committed local config was renamed `salm_uwb_atcc_v2.yaml` (2026-09-08) with an explicit header comment documenting this unresolved provenance gap, so future users aren't misled into thinking it reproduces the result.
+
+Resolution: Partially resolved — the WER result is verified genuine; the exact hyperparameters that produced it remain unrecoverable from any file (local or HuggingFace) checked so far. Config file renamed and annotated, not fixed (cannot fix what isn't known).
+
+Related Records: [[ISS-004]], [[AUD-004]], [[DEC-005]], [[VAL-012]]
+
+---
+
+## ISS-008 — No gender-stratified Canary-Qwen lhotse cuts exist yet for ATCOSIM speaker-independent evaluation
+
+Date: 2026-09-07
+Status: OPEN (documented only, not fixed — a data-conversion prerequisite, not a training action)
+
+Description: `~/w2v2-air-traffic/experiments/data/atcosim_corpus/lhotse/` contains only `atcosim_train_cuts.jsonl` and `atcosim_test_cuts.jsonl` (the full, leaked-split corpus). No `train_female`/`train_male`/`test_female`/`test_male` lhotse cuts exist. W2V2's speaker-independent evaluation ([[EXP-007]]) used the Kaldi-format gender splits directly and did not need lhotse cuts; Canary-Qwen's NeMo/Lhotse pipeline requires them.
+
+Evidence: `find ~/w2v2-air-traffic/experiments/data/atcosim_corpus/lhotse -type f` lists only the two full-corpus files.
+
+Impact: Before any Canary-Qwen speaker-independent run (`research_report/FINAL_RESEARCH_PROGRAM.md` Section 9/Stage 4's "S4-SPK" experiment) can be scheduled, the four gender-specific lhotse cut files must be built from the existing Kaldi-format `train_female`/`train_male`/`test_female`/`test_male` directories — a near-zero-cost data-conversion step (reusing the existing `prepare_atcosim_lhotse.py`/`convert_manifests_to_lhotse.py` pattern already used for the full corpus), not a training action.
+
+Mitigation: None applied yet — flagged as a prerequisite for Stage 4 of the execution plan.
+
+Resolution: Not resolved.
+
+Related Records: [[EXP-007]], [[EXP-010]], [[DEC-005]]
+
+---
+
+## ISS-009 — A real Canary-Qwen v3 UWB-ATCC checkpoint survives at ~/canary-ft/experiments/checkpoints/, contradicting "all checkpoints lost," and its config disagrees with the committed/cited one
+
+Date: 2026-09-07
+Status: OPEN (documented only, nothing deleted or modified)
+
+Description: During Stage 2 preflight, `~/canary-ft/experiments/checkpoints/` was found to contain full, real FSDP distributed checkpoints (step 500 through 10000-last, ~5.6GB each) dated 2026-04-22/23, for a run named `canary_uwb_atcc_v3` in its own `exp_config.yaml`. This directly conflicts with the user's own prior statement ("I have lost the original training data/checkpoints/results from the earlier runs") that the entire IEEE-review-response retraining program ([[DEC-005]], [[DEC-006]], [[EXP-010]]) was built on. At the time, this surviving config's `lora.target_modules` appeared to be `["q_proj"]` only — not `["q_proj", "v_proj"]` as committed/cited. Two other undocumented historical run directories (`run_0`: LoRA r=128, `run_1`: LoRA r=64 — a rank never mentioned in any doc or the manuscript) exist as logs only, with no surviving checkpoint weights.
+
+**CORRECTION (2026-09-08):** the `q_proj`-only claim above is **retracted**. Root cause: `exp_config.yaml` is rewritten within the first ~30–60s of *any* new training run starting. When Stage 2 was launched, it silently overwrote this same file before the emergency protective rename (done ~9 minutes into Stage 2's run, in time to save the `checkpoints/` directory but too late for `exp_config.yaml`). The file later re-read and quoted as "historical" was actually already Stage 2's own config, not the original. **Ground truth, recovered independently from the checkpoint's own embedded `meta.pt` hyperparameters** (baked in by PyTorch Lightning at save time, unaffected by any later file overwrite): `lora_dropout: 0.1`, `target_modules: ['q_proj', 'v_proj']` (both), `spec_augment` present (freq_masks=2, time_masks=10), `weight_decay: 0.01` — this **exactly matches** the documented/committed v3 recipe. See [[VAL-011]] for the full corrected finding, which is actually more serious than the original claim: a checkpoint verified to have the exact documented v3 training config still does not reproduce the manuscript's cited 20.70% WER.
+
+Evidence (original, now superseded): `find ~/canary-ft/experiments/checkpoints -type f`; `cat ~/canary-ft/experiments/exp_config.yaml` at the time (before realizing it was contaminated). Evidence (corrected): `torch.load(.../step=10000-last.ckpt/meta.pt')['hyper_parameters']['cfg']`, read directly this session — see [[VAL-011]].
+
+Impact: (1) The premise that all Canary-Qwen checkpoints are lost is not fully accurate — the v3 UWB-ATCC run survives and was evaluated directly. (2) The real finding is not a config mismatch but a **reproducibility gap**: correct config, wrong WER. See [[VAL-011]]. (3) No v1-equivalent baseline checkpoint survives (confirmed absent from `run_0`/`run_1`), so Stage 2 of [[EXP-010]] was correctly launched and has now completed ([[VAL-010]]).
+
+Mitigation: The surviving checkpoint was evaluated (inference only, near-zero GPU cost) — see [[VAL-011]] for the result and its implications.
+
+Resolution: **FULLY RESOLVED (2026-09-08) — see [[VAL-012]].** Both the config-provenance question and the WER-reproducibility question are now answered: the checkpoint's config genuinely matches the documented v3 recipe (already established here), AND its WER genuinely reproduces 20.70% — the earlier apparent non-reproduction ([[VAL-011]]) was itself caused by an unrelated caching bug in `eval_finetuned.py`, not a real problem with this checkpoint. Verified three independent ways: isolated local re-eval, independent HuggingFace download, and the author's own contemporaneous `v3_results.json` — all bit-for-bit identical. User's original assertion that this result was not fabricated is vindicated with reproducible evidence.
+
+Related Records: [[ISS-007]], [[DEC-005]], [[DEC-006]], [[DEC-007]], [[EXP-010]], [[EXP-011]], [[VAL-011]], [[VAL-012]]
 
 ---
 

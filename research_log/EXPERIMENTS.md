@@ -206,6 +206,45 @@ Related Records: [[ISS-001]], [[DEC-001]], [[VAL-004]], [[VAL-005]], [[VAL-006]]
 
 ---
 
+## EXP-009 — IEEE SLT review-response program: Canary-Qwen decoder-adaptation-scope study
+
+Date: 2026-09-07 (proposed; not yet executed)
+Status: PROPOSED
+
+Objective: Execute the P0 experiment program from `research_report/IEEE_REVIEW_RESPONSE_RESEARCH_PLAN.md` and [[DEC-005]] — a controlled study of Canary-Qwen decoder-adaptation scope (LoRA q/v-only baseline → broader-target LoRA → full decoder fine-tune, gated on a VRAM feasibility check) paired with a sequential component-wise regularization ablation and a decoding-fairness-corrected comparison against the W2V2-large CTC baseline.
+
+Hypothesis: Broadening Canary-Qwen's decoder adaptation scope beyond q/v-only LoRA will measurably reduce WER on UWB-ATCC; the magnitude of that reduction determines whether the redesigned paper's headline claim is "adaptation scope explains most of the gap to W2V2" or "adaptation scope alone does not explain the gap, implicating architecture/pretraining more fundamentally."
+
+Dataset: UWB-ATCC (train=10.54h/11,543 utt, test=2.63h/2,886 utt, verified this session via direct `segments` duration computation).
+
+Model: nvidia/canary-qwen-2.5b (SALM), same base as prior runs.
+
+Configuration: Staged per the report's Section 16 roadmap — Stage 0 feasibility spikes (N-best generation support in installed NeMo; full-decoder-FT VRAM fit), Stage 1 smoke tests, Stage 3 sequential ablations (SpecAugment-only, dropout-only, conditionally weight-decay-only; broader-LoRA; full-decoder-FT if feasible), Stage 4 fair comparison, Stage 5 analysis of already-completed [[EXP-007]] per-speaker breakdown.
+
+Random Seed: 1234 (matching existing convention); single seed except the final chosen headline configuration, which gets one confirmatory re-seed run (Stage 7).
+
+Hardware: 4× RTX 2080 Ti, 11GB each — verified this session (`nvidia-smi`), unchanged from prior experiments.
+
+GPU Allocation: 4 GPUs via FSDP (`tensor_parallel_size=1, data_parallel_size=4`), per [[DEC-004]] — DDP OOMs this model size.
+
+Command: Not yet finalized — pending Stage 0 spike results (see report Section 16 for the adaptive decision tree).
+
+Estimated Cost: ~86–108 GPU-hours for the full P0 program (~5–6 wall-clock days at 4-GPU utilization), per the report's Section 17 compute budget.
+
+Actual Runtime: N/A — not executed.
+
+Results: N/A — not executed.
+
+Metrics: N/A — not executed.
+
+Conclusion: N/A — not executed. No training has been launched for this experiment; this record exists per the Experiment Gate rule (proposed, not implying execution) to make the proposed program visible to future sessions before any GPU-hours are spent.
+
+Next Action: Await explicit user approval before Stage 0 spikes (which are free/code-only) or any subsequent GPU-hour-consuming stage. See `research_report/IEEE_REVIEW_RESPONSE_RESEARCH_PLAN.md` for full design, risk register, and adaptive decision tree.
+
+Related Records: [[DEC-005]], [[ISS-007]], [[EXP-007]], [[ISS-005]], [[ISS-006]], [[AUD-004]]
+
+---
+
 ## EXP-008 — UWB-ATCC W2V2 hyperparameter ablations (dropout, mask_time_prob)
 
 Date: recovered 2026-09-06 (proposed; not yet executed)
@@ -216,3 +255,73 @@ Objective: Study the effect of dropout and mask_time_prob on UWB-ATCC W2V2 fine-
 Evidence of proposal only: SUMMARY.md "Pending / Next Steps" — "UWB-ATCC W2V2 ablations: Effect of dropout, mask_time_prob on UWB-ATCC W2V2." No configuration, run, or result exists in the repo.
 
 Related Records: [[EXP-001]]
+
+---
+
+## EXP-010 — Execution-ready adaptive research program (IEEE SLT review response, full plan)
+
+Date: 2026-09-07 (proposed; not yet executed)
+Status: PROPOSED
+
+Objective: Convert [[DEC-005]]'s chosen research question (Canary-Qwen decoder-adaptation-scope study) into a staged, gated, GPU-hour-minimizing execution plan. Full design in `research_report/FINAL_RESEARCH_PROGRAM.md`.
+
+Hypothesis: Broadening Canary-Qwen's decoder adaptation scope beyond LoRA q/v-only will measurably reduce UWB-ATCC WER; the magnitude determines whether the redesigned paper's headline claim is "adaptation scope explains most of the W2V2 gap" (best case), "adaptation scope explains part of it" (neutral case), or "adaptation scope alone does not explain it" (negative case) — see report Section 14.
+
+Dataset: UWB-ATCC (train=10.54h/11,543 utt, test=2.63h/2,886 utt — verified this session) for the core adaptation-scope/regularization program; ATCOSIM gender-stratified splits (verified leakage-free, [[EXP-007]]) for the speaker-independent capstone, pending [[ISS-008]]'s lhotse-cuts prerequisite.
+
+Model: nvidia/canary-qwen-2.5b (SALM), Qwen3-1.7B decoder, FastConformer encoder (frozen throughout this program).
+
+Configuration: Staged — Stage 0 (audit, done) → Stage 1 (Spike D: 1-step VRAM feasibility smoke test, ~0.02 GPU-h, requires explicit approval to launch) → Stage 2 (fresh v1-equivalent control checkpoint, ~21 GPU-h) → Stage 3 (adaptation-scope Branch 2 broader-LoRA always, Branch 3 full-decoder-FT gated on Stage 1; regularization Runs 1/2 always, Run 3 gated on Run 1's result) → Stage 4 (decoding-fairness N-best+KenLM comparison, inference-only; speaker-independent capstone on winning config) → Stage 5 (optional confirmatory re-seed) → Stage 6 (manuscript reconstruction, no GPU cost).
+
+Random Seed: 1234 (matching existing convention); single seed except the final headline configuration (Stage 5 re-seed).
+
+Hardware: 4× RTX 2080 Ti, 11GB each — verified this and prior session. FSDP (`tensor_parallel_size=1, data_parallel_size=4`) per [[DEC-004]], unchanged from prior Canary-Qwen runs — not reduced below 4 GPUs, since doing so would invalidate comparison with existing baseline numbers measured under this exact topology.
+
+GPU Allocation: 4 GPUs for every training experiment; 1 (inference-only, no training) for the decoding-fairness comparison.
+
+Command: Not finalized — pending Stage 1's Spike D result (see report Section 4's adaptive decision tree for the full branching logic).
+
+Estimated Cost: Minimum ~63 GPU-hours (~3.4 wall-clock days), expected ~94.5 GPU-hours (~5.1 days), maximum ~126 GPU-hours (~6.75 days) — full breakdown in report Section 17.
+
+Actual Runtime: N/A — not executed.
+
+Results: N/A — not executed.
+
+Metrics: N/A — not executed.
+
+Conclusion: N/A — not executed. This record exists per the Experiment Gate rule to make the proposed, gated program visible to future sessions before any GPU-hours are spent. Supersedes [[EXP-009]] as the execution-ready version of the same underlying research question — [[EXP-009]] is preserved unchanged as the earlier, less-structured proposal.
+
+Next Action: Await explicit user approval for Stage 1's Spike D (the first step requiring GPU time, ~0.02 GPU-hours, <30 min) — per the report's executive summary, this is recommended as the first action "tomorrow morning."
+
+Related Records: [[DEC-005]], [[DEC-006]], [[ISS-007]], [[ISS-008]], [[VAL-008]], [[EXP-007]], [[EXP-009]], [[AUD-004]]
+
+---
+
+## EXP-011 — Re-run the "lower-LR" (1e-4) Canary-Qwen UWB-ATCC ablation (low priority)
+
+Date: 2026-09-08 (proposed; not yet executed)
+Status: PROPOSED, LOW PRIORITY
+
+Objective: Re-establish a verifiable checkpoint for the manuscript-cited "lower-LR" ablation (lr=1e-4, otherwise identical to v1's LoRA config), whose original checkpoint is confirmed lost (`run_0`, logs only, per [[VAL-012]]).
+
+Hypothesis: A fresh run under `salm_uwb_atcc_lr1e4.yaml` (currently local-only, not yet committed to GitHub) will reproduce the cited 32.58% WER, consistent with how v1's fresh reproduction matched its historical citation almost exactly ([[VAL-010]]).
+
+Dataset: UWB-ATCC (same as v1/v2/v3 — train=10.54h/11,543 utt, test=2.63h/2,886 utt).
+
+Model: nvidia/canary-qwen-2.5b (SALM), LoRA q_proj+v_proj r=128, lr=1e-4 (vs. v1's 5e-4), no SpecAugment, weight_decay=1e-3, 10,000 steps.
+
+Configuration: `salm_uwb_atcc_lr1e4.yaml` (needs to be committed to `models/canary-qwen/scripts/` as part of this experiment, and renamed to fit the v1/v2/v3-adjacent convention — e.g. `salm_uwb_atcc_lr1e4.yaml` is fine as a distinctly-named variant, not part of the core v1/v2/v3 trio).
+
+Hardware: 4× RTX 2080 Ti, FSDP (`tensor_parallel_size=1, data_parallel_size=4`), matching every other Canary-Qwen UWB-ATCC run this session.
+
+Estimated Cost: ~21 GPU-hours (~5.25h wall-clock on 4 GPUs), based on the verified actual rate from [[VAL-010]]'s fresh v1 reproduction (not the previously-documented-but-wrong ~5.3h figure).
+
+Priority: **Low** — per user instruction, this is queued behind the higher-priority items in [[EXP-010]]'s execution plan (Spike D, the adaptation-scope study, the regularization ablation), not scheduled for immediate execution.
+
+Actual Runtime: N/A — not executed.
+
+Results: N/A — not executed.
+
+Next Action: Await explicit approval, scheduled after [[EXP-010]]'s higher-priority items.
+
+Related Records: [[VAL-012]], [[EXP-010]], [[DEC-007]]

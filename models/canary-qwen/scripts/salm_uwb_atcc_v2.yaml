@@ -1,3 +1,13 @@
+# KNOWN ISSUE (2026-09-08, see ISS-007 in research_log/ISSUES.md):
+# This file is byte-identical to salm_uwb_atcc_v1.yaml, including freeze_params
+# still listing perception.encoder as frozen. It does NOT actually differ from
+# v1 on paper, yet the resulting model (verified via real inference against the
+# HuggingFace-hosted consolidated_model.pt) measurably differs from v1 (23.82%
+# vs 23.32% WER) — a real, reproducible difference with no config to explain it.
+# The training_config.yaml uploaded alongside the HF model has the identical
+# problem. The true hyperparameters that produced the 23.82% result are not
+# currently recoverable from any surviving file. Do not trust this file to
+# reproduce that result; only the WER number itself (verified) should be cited.
 model:
   pretrained_llm: Qwen/Qwen3-1.7B
   pretrained_asr: nvidia/canary-1b-flash

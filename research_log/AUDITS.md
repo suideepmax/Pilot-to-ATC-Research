@@ -81,3 +81,32 @@ Conclusion: The current canonical numbers in the repo are: UWB-ATCC W2V2 = 14.54
 Limitations: `models/canary-qwen/docs/finetuned_results_unfrozen.json` still stores the old value `"params_trained_pct": 32.8` — the JSON artifact was not updated when the docs were corrected. This is a stale-data discrepancy, not a re-derivation; flagged as [[ISS-004]]. Per user instruction, this audit does NOT modify that file or any existing research documentation.
 
 Related Records: [[ISS-004]], [[DEC-002]]
+
+---
+
+## AUD-004 — Full repository structure/scripts/docs audit and hardware/software efficiency review
+
+Date: 2026-09-07
+Status: COMPLETE
+
+Objective: User-requested audit of the entire `Pilot-to-ATC-Research` repo (GitHub structure, all scripts, all `.md` docs) plus a hardware/software training-efficiency review, "to help prepare for the research."
+
+Scope: Full repo tree (`find`), all `.sh` scripts in both `Pilot-to-ATC-Research` and the cloned `w2v2-air-traffic`, all `.md` docs (README.md, SUMMARY.md, REPLICATION_GUIDE.md, `models/{w2v2,canary-qwen}/docs/*.md`, `shared/*.md`), and every training config's GPU/batch allocation.
+
+Methodology: Direct `find`/`grep`/`cat`/`Read` inspection; no agents. Cross-checked every WER/param/step figure across all docs against each other and against the underlying JSON result files.
+
+Findings:
+1. **GitHub structure**: `.gitignore` correctly excludes model weights/audio/logs — no bloat. README.md's "Repository Structure" diagram is stale — missing `train_wav2vec2_atcosim_large_{female,male}.sh` (added 2026-09-06) and `research_log/` entirely.
+2. **Scripts — two incompatible environment conventions coexist, undocumented**: UWB-ATCC-generation scripts (`train_wav2vec2_large.sh`, `train_wav2vec2_base_*.sh`, `eval_large_model.sh`, `train_kenlm.sh`) have `conda activate w2v2_asr` but no `set -e`. ATCOSIM-generation scripts (`train_wav2vec2_atcosim_large.sh` baseline + `_female`/`_male`, `data_prepare_*.sh`) have `set -euo pipefail` but **no `conda activate`** — this exact gap caused the real launch failure documented in [[ISS-006]]/[[ENV-004]], and it predates the female/male scripts (the ATCOSIM baseline itself has the same gap).
+3. **Stale-number bug survived the original fix, in a NEW location**: `models/canary-qwen/scripts/train_canary_unfrozen.sh`'s header comment still reads "32.8% params" — commit 054bd54 (see AUD-003 above) fixed this everywhere except this script and `finetuned_results_unfrozen.json` (already known, [[ISS-004]]).
+4. **Documented prerequisite doesn't exist**: `train_wav2vec2_large.sh` says "See docs/SETUP.md for sed commands" to switch `python3`→`torchrun`; `SETUP.md`'s 8 "Known Issues" do not include this fix anywhere. A new user following `REPLICATION_GUIDE.md` from scratch has no documented step for the DDP switch that every training script assumes is already done.
+5. **Docs don't reflect ATCOSIM Phase 4 completion (now resolved by EXP-007, this session)**: at the time of this audit, `SUMMARY.md`'s "Pending/Next Steps" and `PROGRESS_ATCOSIM.md`'s Phase 4 header both still said the speaker-independent ATCOSIM re-run hadn't happened. `SUMMARY.md` also mischaracterized the design as cross-gender train/test, contradicting `PROGRESS_ATCOSIM.md`'s own (correct) within-gender description.
+6. **Hardware/software efficiency**: current large-model configs (W2V2 batch=1/DDP, Canary-Qwen FSDP) are correctly minimal for the 11GB-VRAM constraint. Two historical exploratory runs were flagged as resource-inefficient: (a) the UWB-ATCC W2V2-base 3,000-step "pipeline validation only" run used all 4 GPUs when 1 would suffice; (b) the Canary-Qwen "Lower LR" and "Research-optimized" ablations both ran to their full fixed step count despite trajectories that were likely visibly bad well before the final step — a staged/gated step-count protocol would have saved GPU-hours without losing information.
+
+Evidence: direct file reads and greps as described in Methodology; specific line/file references given in the chat report delivered to the user in this session (not reproduced verbatim here to keep this record concise — see the full text if needed by searching this session's transcript, or re-run the same `find`/`grep` commands, all of which are reproducible from the commands listed).
+
+Conclusion: No numeric drift found in any cross-checked WER/param/step figure across README/SUMMARY/REPLICATION_GUIDE/PROGRESS_ATCOSIM/model_comparison.md (all consistent post-054bd54) — the issues found are structural (script conventions, doc staleness, one new stale-number instance, one documentation gap), not new instances of numeric drift.
+
+Limitations: This audit was performed via chat report at the time and **was not written to this file until 2026-09-07 (same day), after the omission was caught during a later engineering-memory update** — flagging this explicitly per the project's own "never claim historical knowledge that was not actually retrieved or verified" policy. No files were modified during the original audit; this entry is a faithful reconstruction of that audit's actual findings, not a re-derivation.
+
+Related Records: [[ISS-004]], [[ISS-006]], [[ENV-004]], [[EXP-007]], [[AUD-003]]

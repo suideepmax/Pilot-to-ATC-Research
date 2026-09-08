@@ -6,9 +6,9 @@
 |---|---|---|---|
 | W2V2 Large (no LM) | 317M (100%) | 14.54% | ~8.6 hrs |
 | W2V2 Large (with KenLM) | 317M (100%) | 12.69% | ~8.6 hrs |
-| Canary-Qwen v3 (LoRA + regularization) | 27.8M (0.97%) | 20.70% | ~5.3 hrs |
-| Canary-Qwen (LoRA only) | 27.8M (0.97%) | 23.32% | ~5.3 hrs |
-| Canary-Qwen (encoder unfrozen) | 838.8M (29.2%) | 23.82% | ~5.3 hrs |
+| Canary-Qwen v3 (LoRA + regularization) | 27.8M (0.97%) | 20.70% | ~21 hrs (corrected 2026-09-08; previously misreported as ~5.3 hrs) |
+| Canary-Qwen (LoRA only) | 27.8M (0.97%) | 23.32% | ~21 hrs (verified) |
+| Canary-Qwen (encoder unfrozen) | 838.8M (29.2%) | 23.82% | ~21 hrs (estimated; config to reproduce is unverified, see ISS-007) |
 | Canary-Qwen (zero-shot) | 0 | 81.49% | N/A |
 
 ## Hyperparameter Ablation (Canary-Qwen)
@@ -18,8 +18,7 @@
 | v3 (best) | 5e-4 | 0.1 | ON | 1e-2 | 10,000 | 20.70% |
 | Original LoRA | 5e-4 | 0.01 | OFF | 1e-3 | 10,000 | 23.32% |
 | Encoder unfrozen | 5e-4 | 0.01 | OFF | 1e-3 | 10,000 | 23.82% |
-| Lower LR | 1e-4 | 0.01 | OFF | 1e-3 | 10,000 | 32.58% |
-| Research-optimized | 3e-5 | 0.1 | ON | 1e-2 | 2,500 | 60.46% |
+| Lower LR | 1e-4 | 0.01 | OFF | 1e-3 | 10,000 | 32.58% (citation only, checkpoint lost — planned for re-run) |
 
 The v3 run shows that the original 24% WER plateau was caused by overfitting, not the frozen decoder. Adding SpecAugment, dropout (0.1), and weight decay (1e-2) while keeping the original lr=5e-4 broke through the ceiling.
 
@@ -70,7 +69,7 @@ The v3 config converges faster at every step after 500, and keeps improving at s
 
 3. Canary-Qwen shows parameter efficiency: 0.97% of parameters trained achieves better WER (20.70% with regularization) than training 29.2% without it (23.82%).
 
-4. Lowering the learning rate hurts: lr=1e-4 gives 32.58% and lr=3e-5 gives 60.46%. The LoRA adapters need aggressive updates (5e-4) to shift from general English to ATC domain, but also need regularization to avoid memorizing the small training set.
+4. Lowering the learning rate hurts: lr=1e-4 gives 32.58% (citation only, checkpoint lost). The LoRA adapters need aggressive updates (5e-4) to shift from general English to ATC domain, but also need regularization to avoid memorizing the small training set.
 
 5. W2V2 converges faster at every step and keeps improving through 10k steps (15.15%). Canary v3 also keeps improving at 10k (22.30% on 500 samples, 20.70% on full test), but the gap remains ~6%.
 
