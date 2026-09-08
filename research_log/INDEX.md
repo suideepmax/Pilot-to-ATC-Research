@@ -7,6 +7,7 @@ Initialized: 2026-09-06. All records below were recovered from existing reposito
 - AUD-002 — UWB-ATCC / ATCOSIM data split and format audit (as documented)
 - AUD-003 — Documentation self-consistency corrections (WER metric naming, encoder-unfrozen param %)
 - AUD-004 — Full repo structure/scripts/docs audit + hardware/software efficiency review (script convention split, stale 32.8% instance, SETUP.md gap, stale Phase 4 docs)
+- AUD-005 — Independent fresh-eyes re-audit of Canary-Qwen v1/v2/v3 config rename (DEC-008): rename/fix confirmed correct, but found v1/v3 checkpoint-dir collision + stale REPLICATION_GUIDE.md rm -rf [see ISS-010]
 
 ## Validation
 - VAL-001 — UWB-ATCC W2V2-large final checkpoint beats paper baseline (14.54%/12.69% vs paper 17.48-17.56%/13.72-14.26%)
@@ -55,6 +56,7 @@ Initialized: 2026-09-06. All records below were recovered from existing reposito
 - ISS-007 — Canary-Qwen v2 (encoder-unfrozen) config unresolved — WER=23.82% verified genuine via HF inference, but exact hyperparameters unrecoverable from any of 3 independent config sources checked [PARTIALLY RESOLVED]
 - ISS-008 — No gender-stratified Canary-Qwen lhotse cuts exist yet for ATCOSIM speaker-independent evaluation [OPEN]
 - ISS-009 — FULLY RESOLVED (2026-09-08): v3 checkpoint's config AND WER both verified genuine (20.70%, matches HF + author's own record). Earlier "doesn't reproduce" conclusion was a caching-bug artifact [see VAL-012]
+- ISS-010 — v1/v3 share explicit_log_dir (framework-confirmed collision risk); train_canary_v1/v2.sh depend on an undocumented manual `cp` step not yet performed; REPLICATION_GUIDE.md §2.11 has a stale `rm -rf` that would delete v1+v3 checkpoints [OPEN]
 
 ## Environment
 - ENV-001 — System hardware (4x RTX 2080 Ti, 11GB each, no sudo, Ubuntu 24)

@@ -1,35 +1,39 @@
-# FIXED (2026-09-08): the original committed version of this file was
-# byte-identical to salm_uwb_atcc_v1.yaml (encoder still frozen), and could
-# not reproduce the historically-cited 23.82% WER result -- see ISS-007 in
-# research_log/ISSUES.md for the full investigation (three independent config
-# sources, including the one uploaded to HuggingFace, all had this same bug).
-# The original 23.82% result's exact hyperparameters remain unrecoverable and
-# that number should NOT be assumed to come from this corrected config --
-# this is a fresh, independently-constructed "encoder actually unfrozen"
-# config (perception.encoder removed from freeze_params below), intended to
-# finally produce a config-verified, reproducible v2 result via a new
-# training run, not to reproduce the old number. See EXP-011/research_log for
-# the planned re-run and its (new) result once executed.
+# Full decoder fine-tune (Adaptation-Scope Branch 3, research_report/FINAL_RESEARCH_PROGRAM.md Section 6).
+# Deliberately NOT named v1/v2/v3/v4 to avoid colliding with the existing canonical
+# naming scheme -- this is a separate adaptation-scope experiment, not a fourth
+# "version" of the same baseline.
+#
+# Design intent: isolate ADAPTATION SCOPE alone as the single variable vs. v1.
+# Everything else (optimizer, LR, data, regularization-off) is held identical to
+# v1 (salm_uwb_atcc_v1.yaml) on purpose -- do not add SpecAugment/dropout/weight_decay
+# changes here, that would confound this experiment with the separate regularization
+# ablation (v3 / EXP-010 Section 7).
+#
+# freeze_params below and the absence of a `lora:` block were verified via Spike D
+# (research_log/VALIDATION.md VAL-009): 1-step smoke test confirmed this exact
+# freeze pattern produces 2,033,839,104 trainable params (llm + embed_tokens),
+# matching the intended "unfreeze the whole decoder" config, and fits in VRAM on
+# 4x RTX 2080 Ti via FSDP. This file extends that smoke-test config to a full
+# 10,000-step run -- NOT YET LAUNCHED, config only as of 2026-09-08.
+
 model:
   pretrained_llm: Qwen/Qwen3-1.7B
   pretrained_asr: nvidia/canary-1b-flash
   pretrained_weights: True
 
+  # Only the encoder stays frozen. llm and embed_tokens are NOT in this list,
+  # so the entire Qwen3-1.7B decoder trains directly (no LoRA -- no `lora:`
+  # block below, so maybe_install_lora() in
+  # nemo/collections/speechlm2/parts/lora.py skips PEFT wrapping entirely).
   freeze_params:
-    - "^llm\\..+$"
-    - "^embed_tokens\\..+$"
     - "^perception\\.preprocessor\\..+$"
+    - "^perception\\.encoder\\..+$"
   prevent_freeze_params: []
 
   prompt_format: qwen
   audio_locator_tag: "<|audioplaceholder|>"
 
-  lora:
-    task_type: CAUSAL_LM
-    r: 128
-    lora_alpha: 256
-    lora_dropout: 0.01
-    target_modules: ["q_proj", "v_proj"]
+  # NOTE: deliberately no `lora:` block -- see freeze_params comment above.
 
   perception:
     target: nemo.collections.speechlm2.modules.perception.AudioPerceptionModule
@@ -38,7 +42,8 @@ model:
       _target_: nemo.collections.speechlm2.modules.perception.IdentityConnector
       d_model: 1024
 
-  # Matched to W2V2: lr=5e-4, but with fp16 stability safeguards
+  # Identical to v1's optimizer settings -- adaptation scope is the only
+  # variable under test here.
   optimizer:
     _target_: torch.optim.AdamW
     lr: 5e-4
@@ -107,17 +112,14 @@ data:
     shard_seed: "randomized"
 
 exp_manager:
+  # Deliberately isolated from v1 (~/canary-ft/experiments/) and v2
+  # (~/canary-ft/experiments_v2/) -- a distinct top-level directory, learned
+  # from the v1/v3 checkpoint near-miss this session (research_log/ISSUES.md
+  # ISS-009 correction). `name` alone does NOT isolate output paths in this
+  # exp_manager setup -- explicit_log_dir is what actually matters.
   exp_dir: null
-  # NOTE: explicit_log_dir is deliberately DIFFERENT from v1/v3's shared
-  # ~/canary-ft/experiments/ path. That shared directory does NOT actually
-  # isolate runs by `name` (checkpoints/exp_config.yaml always land flat in
-  # <explicit_log_dir>/checkpoints/ regardless of `name` -- confirmed this
-  # session when v1's launch silently overwrote a historical exp_config.yaml
-  # within its first minute, before it could be backed up in time). Using a
-  # separate top-level directory here is the only mechanism that actually
-  # prevents this run from colliding with v1/v3's checkpoints.
-  explicit_log_dir: /home/kotasthane/canary-ft/experiments_v2/
-  name: canary_uwb_atcc_v2
+  explicit_log_dir: /home/kotasthane/canary-ft/experiments_full_decoder/
+  name: canary_uwb_atcc_full_decoder
   create_tensorboard_logger: False
   create_checkpoint_callback: true
   use_datetime_version: true

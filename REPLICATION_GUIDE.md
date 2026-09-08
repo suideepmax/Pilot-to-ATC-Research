@@ -185,13 +185,13 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 \
 ### 2.11 Train Canary-Qwen v2 — Encoder Unfrozen (29.2% params)
 ```bash
 cp ~/Pilot-to-ATC-Research/models/canary-qwen/scripts/salm_uwb_atcc_v2.yaml ~/canary-ft/conf/
-rm -rf ~/canary-ft/experiments/checkpoints/*
 ulimit -n 65536
 CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 \
     ~/NeMo/examples/speechlm2/salm_train.py \
     --config-path=/home/kotasthane/canary-ft/conf \
     --config-name=salm_uwb_atcc_v2
 ```
+**No `rm -rf` needed here (removed 2026-09-08, see `research_log/ISSUES.md` ISS-010):** v1, v2, and v3 now each write to their own isolated `explicit_log_dir` (`~/canary-ft/experiments/`, `experiments_v2/`, `experiments_v3/` respectively) — a stale `rm -rf ~/canary-ft/experiments/checkpoints/*` previously sat here from when v2 shared v1's directory; it would now delete v1's checkpoints while accomplishing nothing for v2, since v2 no longer writes there. Do not add a `rm -rf` back without first confirming which directory that specific config actually targets.
 - Trainable: 838.8M / 2,870M (29.2%)
 - Estimated time: ~21 hours (see v1 note above)
 - Result: WER 23.82% (verified via inference against the published model — **the config above is known NOT to reproduce this result**; see `salm_uwb_atcc_v2.yaml`'s header comment and `research_log/ISSUES.md` ISS-007)

@@ -1,6 +1,6 @@
 # Experiments
 
-Provenance note (added 2026-09-07): Entries dated "recovered 2026-09-06" (EXP-001, EXP-002, EXP-007) were reconstructed by a prior Claude Code session from existing repository documentation and git history (see `research_log/INDEX.md`), not authored by the user. Each `Hypothesis:` field in those entries is that recovery session's synthesis of the project's documented intent — e.g., EXP-007's hypothesis was inferred from the leakage finding and Phase-4 TODO already described in `models/w2v2/docs/PROGRESS_ATCOSIM.md` and `SUMMARY.md` — not a verbatim quote from any file the user wrote. The underlying experimental design (train/test splits, what leakage was found) is accurately sourced from those docs; the specific hypothesis wording is not.
+Provenance note (added 2026-09-07): Entries dated "recovered 2026-09-06" (EXP-001, EXP-002, EXP-007) were reconstructed from existing repository documentation and git history (see `research_log/INDEX.md`), not authored by the user. Each `Hypothesis:` field in those entries is a synthesis of the project's documented intent — e.g., EXP-007's hypothesis was inferred from the leakage finding and Phase-4 TODO already described in `models/w2v2/docs/PROGRESS_ATCOSIM.md` and `SUMMARY.md` — not a verbatim quote from any file the user wrote. The underlying experimental design (train/test splits, what leakage was found) is accurately sourced from those docs; the specific hypothesis wording is not.
 
 ## EXP-001 — UWB-ATCC: wav2vec2-large-960h-lv60-self fine-tuning (Phase 4)
 
