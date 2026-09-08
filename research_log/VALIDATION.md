@@ -320,3 +320,32 @@ Conclusion: **All three canonical results are genuine and independently verified
 **Also resolved**: `run_0`/`run_1`/`run_2` (three additional historical training attempts, log-only, no surviving checkpoints) are now fully mapped: `run_0` = lower-LR (1e-4) config, `run_1` = "research-optimized" r=64/4-projection LoRA (crashed with NaN at step 1500, per `PROGRESS.md`, never evaluable), `run_2` = "research-optimized v2" r=128/2-projection LoRA (produced the cited 60.46%). Per user decision (2026-09-08), the research-optimized ablation (both variants) is dropped from the active manuscript/research record — see [[DEC-007]]. The lower-LR config is retained and planned for a fresh, lower-priority retrain — see [[EXP-011]].
 
 Related Records: [[VAL-010]], [[VAL-011]], [[ISS-007]], [[ISS-009]], [[DEC-007]], [[EXP-011]]
+
+## VAL-013 — S4-FAIR: decoding-fairness comparison (N-best + in-domain KenLM) on Canary-Qwen v1
+
+Date: 2026-09-08
+Status: COMPLETE, PASS
+
+Objective: Resolve the reviewers' decoding-fairness complaint (manuscript compared W2V2+KenLM against Canary-Qwen native, an apples-to-oranges comparison) by decoding Canary-Qwen with the same in-domain KenLM binary already used for the W2V2 baseline, via 5-best beam-search generation + rescoring, and reporting a fair four-way comparison.
+
+Inputs / Configuration: v1 checkpoint (`step=10000-last.ckpt`, [[VAL-010]]), UWB-ATCC full test set (2,886 utterances), `~/w2v2-air-traffic/experiments/data/uwb_atcc/train/lm/uwb_atcc_4g.binary` (the exact KenLM binary already used for the W2V2+KenLM canonical number, [[DEC-002]]). New scripts: `generate_nbest.py` (5-beam generation via `GenerationConfig(num_beams=5, num_return_sequences=5, output_scores=True, return_dict_in_generate=True)`, confirmed feasible with zero code changes per [[VAL-008]]) and `rescore_kenlm.py` (fuses HF sequence score with KenLM per-word log-score, alpha grid [0.0,0.1,0.3,0.5,0.7,1.0], headline alpha=0.5 chosen to match pyctcdecode's own default used for the W2V2 baseline — not tuned on this test set, to avoid leakage/cherry-picking).
+
+Procedure: Smoke-tested both scripts on 5 samples first (verified real beam diversity, sane per-sequence scores, no exceptions) before running the full test set. Full run: 2,885/2,886 samples succeeded (1 transient CUDA OOM at sample 1777, excluded — 0.03% of test set, not a systematic failure).
+
+Actual Result:
+| Config | WER |
+|---|---|
+| W2V2 native (no LM) | 14.54% |
+| W2V2 + KenLM | 12.69% |
+| Canary-Qwen v1 native, greedy (existing, [[VAL-010]]) | 23.32% |
+| Canary-Qwen v1 native, 5-beam rank-1 | 22.28% |
+| Canary-Qwen v1 + KenLM, 5-best rescore, alpha=0.5 (headline) | 21.79% |
+| Canary-Qwen v1 + KenLM, best alpha=0.3 | 21.71% |
+
+Evidence: `models/canary-qwen/scripts/nbest_v1_full.json` (raw 5-best + scores), `models/canary-qwen/scripts/kenlm_rescore_v1_results.json` (WER at each alpha).
+
+Conclusion: Giving Canary-Qwen the same in-domain KenLM access as W2V2 closes only ~1.5 points of WER (23.32%→21.79%), and roughly two-thirds of that improvement (23.32%→22.28%) comes from beam search itself, not the external LM. The W2V2-vs-Canary gap (14.54%/12.69% vs ~22%) is barely affected by the fairness fix. This is evidence that the original reviewer-flagged fairness asymmetry, while real, does **not** explain the architecture gap — supporting the manuscript's decoder-adaptation-scope framing rather than undermining it.
+
+Remaining Risks: Alpha was swept but not cross-validated on a held-out split distinct from the test set; the headline alpha=0.5 was chosen by an independent, pre-registered criterion (matching W2V2's own default) specifically to avoid this concern, but a fully rigorous treatment would tune alpha on a dev split.
+
+Related Records: [[VAL-008]], [[VAL-010]], [[DEC-002]]
