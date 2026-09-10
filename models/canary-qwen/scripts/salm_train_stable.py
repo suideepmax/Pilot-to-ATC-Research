@@ -1,54 +1,57 @@
 """Training entrypoint for full-decoder-scope Canary-Qwen fine-tuning under
 `precision: 16-true` with real numerical stability (see research_log/ISSUES.md
-ISS-011). A copy of NeMo's salm_train.py, except the model is a StableSALM
-subclass that:
+ISS-011, ISS-012). A copy of NeMo's salm_train.py, except the model is a
+StableSALM subclass that:
 
 1. Scales the loss by the optimizer's current (dynamic) loss_scale before
    backward, so fp16 gradients don't underflow to zero before
    MasterWeightAdamW ever sees them.
-2. Scales the configured gradient_clip_val by the same live factor before
-   Lightning's clip_gradients runs, so the YAML's gradient_clip_val keeps
-   its normal (unscaled) meaning.
-3. In on_before_optimizer_step (which fires BEFORE clipping), checks each
-   gradient tensor for non-finite values. If any rank sees one, every
-   parameter's .grad is set to None (a true skip -- MasterWeightAdamW's
-   `if p.grad is None: continue` then leaves step/momentum/master state
-   completely untouched, unlike the earlier zero_()-based version which
-   still advanced momentum on a "skipped" step) and the loss scale is
-   halved. After GROWTH_INTERVAL consecutive clean steps it is doubled
-   back, mirroring torch.amp.GradScaler's own backoff/growth policy.
-
-   Gate 1 (v6/v7, 2026-09-09) measured a 14-20% non-finite rate under the
-   previous *static* LOSS_SCALE=1024 -- 150-400x above GradScaler's healthy
-   equilibrium (<0.1%, growth_interval=2000 by default) -- and the rate was
-   LR-independent, i.e. an fp16-overflow property of the fixed scale itself,
-   not a training-instability signal. Dynamic scaling lets the scale settle
-   to whatever value this model's gradients actually tolerate instead of
-   guessing one static value up front (see ISS-011 follow-up notes).
-4. Logs grad norm / skip / current loss_scale via logging.info on rank 0
-   every step -- `trainer.logger: False` in the YAML means self.log() calls
-   are never persisted anywhere queryable, so this is the only record of
-   these values (Gate 1 v6/v7 both ran with none captured).
+2. In on_before_optimizer_step (which fires before optimizer.step()), checks
+   each gradient tensor for non-finite values via a single fp32 all-reduce.
+   If any rank sees one, every parameter's .grad is set to None (a true skip
+   -- MasterWeightAdamW's `if p.grad is None: continue` then leaves
+   step/momentum/master state completely untouched) and the loss scale is
+   halved. After GROWTH_INTERVAL consecutive clean steps it is doubled back,
+   mirroring torch.amp.GradScaler's own backoff/growth policy.
+3. On clean steps, computes a gradient-clipping coefficient from that SAME
+   fp32 all-reduced norm and folds it into MasterWeightAdamW's existing fp32
+   divide (`grad_divisor`). Gradient clipping is NOT delegated to Lightning's
+   native clip_gradients() -- ISS-012 found that path squares each rank's
+   local gradient-shard norm IN FP16 before all-reducing (DTensor's
+   _NormPartial), overflowing to inf at realistic gradient magnitudes and
+   silently zeroing every gradient. `configure_gradient_clipping` is
+   intentionally not overridden (the YAML leaves gradient_clip_val unset, so
+   Lightning's default hook is already a no-op).
+4. Logs grad norm / clip coefficient / skip / loss_scale via logging.info on
+   rank 0 every step -- `trainer.logger: False` in the YAML means self.log()
+   calls are never persisted anywhere queryable, so this is the only record
+   of these values.
+5. Verifies, once, that the first non-skipped optimizer step actually
+   produced a nonzero exp_avg somewhere (on_before_zero_grad) -- a tripwire
+   for the exact class of bug ISS-012 was: gradients measured as finite and
+   nonzero, then silently zeroed before the optimizer ever used them.
 
 MasterWeightAdamW (in master_weight_adamw.py, same directory) divides the
-received gradient by its own live `loss_scale` attribute and does the real
-AdamW math in fp32. That attribute is the single source of truth: this file
-never keeps its own separate copy of the scale, always reading/writing
-`optimizer.loss_scale` so training_step, configure_gradient_clipping, and
-on_before_optimizer_step can never drift out of sync with each other.
+received gradient by its own live `grad_divisor` attribute (loss_scale, or
+loss_scale/clip_coef on a clean step) and does the real AdamW math in fp32.
+That attribute is the single source of truth for what the optimizer divides
+by; this file never keeps its own separate copy.
 
 Usage: identical to salm_train.py, but pass a config using
 master_weight_adamw.MasterWeightAdamW as the optimizer _target_.
 """
 
 import os
+import re
 
+import hydra
 import torch
 from lightning.pytorch import Trainer
 from omegaconf import OmegaConf
 from torch.distributed.tensor import DTensor
 
 from nemo.collections.speechlm2 import SALM, DataModule, SALMDataset
+from nemo.collections.speechlm2.parts.optim_setup import freeze_and_subset
 from nemo.core.config import hydra_runner
 from nemo.utils import logging
 from nemo.utils.exp_manager import exp_manager
@@ -56,12 +59,55 @@ from nemo.utils.trainer_utils import resolve_trainer_cfg
 
 torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
 
-# Lightning's LightningModule.clip_gradients() raises MisconfigurationException
-# if Trainer(gradient_clip_val=...) is ALSO set while we pass our own explicit
-# value here -- it assumes double-configuration. So `gradient_clip_val` must
-# be left unset (None) in the YAML's trainer block, and this constant is the
-# real, single source of truth for the (unscaled) clip threshold.
-GRADIENT_CLIP_VAL = 0.5
+# ISS-012 (2026-09-10): gradient clipping used to be delegated to Lightning's
+# native self.clip_gradients() -> Precision.clip_grad_by_norm ->
+# torch.nn.utils.clip_grad_norm_, which operates directly on raw fp16 p.grad
+# tensors with NO fp32 upcast. Under FSDP2/DTensor, the per-rank local-shard
+# norm is squared IN FP16 before the cross-rank all-reduce
+# (torch/distributed/tensor/_ops/_math_ops.py's _NormPartial), which overflows
+# to inf whenever a rank's local gradient-shard norm exceeds sqrt(65504)=~256
+# -- routinely true at our observed gradient magnitudes (200-700) once
+# multiplied by any loss_scale >= ~256. An inf norm collapses the clip
+# coefficient to exactly 0, silently zeroing every gradient, AFTER
+# on_before_optimizer_step's finiteness check already passed (that check only
+# verifies the INPUT is finite; clipping then destroys it afterward,
+# invisibly). Checkpoint inspection proved this actually happened: Gate 1 v8,
+# Gate 2 v2, and Gate 2 v3 all performed EXACTLY ZERO weight updates (exp_avg/
+# exp_avg_sq all zero, saved weights bit-identical to pretrained init).
+#
+# Fixed here: clipping is no longer a separate Lightning-native call at all.
+# configure_gradient_clipping is removed (Lightning's default checks
+# self.trainer.gradient_clip_val, which the YAML leaves unset/0, so the
+# default hook is already a no-op -- no override needed). Instead,
+# on_before_optimizer_step computes the clip coefficient from the SAME fp32
+# all-reduced norm it already correctly computes (never touching a raw fp16
+# tensor with it), and folds it into MasterWeightAdamW's existing fp32 divide
+# via `grad_divisor = loss_scale / clip_coef` -- so the fp16 gradient tensor
+# is only ever divided by one fp32 scalar, in fp32, inside the optimizer.
+# This also avoids the underflow risk of the opposite naive fix (multiplying
+# a small fp16 gradient by a small fp32 clip_coef and writing the result back
+# to fp16 -- verified empirically: coefficients around 1e-3, typical at our
+# gradient magnitudes vs a strict clip threshold, collapse most fp16 elements
+# to exactly zero on that write-back).
+GRADIENT_CLIP_VAL = 1000.0
+
+# ISS-011 follow-up #3 / ISS-012 / ISS-013 (2026-09-10): perception.proj (a
+# plain nn.Linear(1024, 2048), the only path from the frozen Canary encoder
+# into Qwen3's embedding space) is randomly initialized in every config this
+# project uses, including v1/v3 -- see ISS-013, this project never loads the
+# released canary-qwen-2.5b checkpoint that DOES contain a trained version of
+# this layer. v1/v3 successfully trained this same randomly-initialized layer
+# via LoRA at lr=5e-4 and reached real, verified WER results, which is
+# evidence a random bridge CAN be trained successfully at that LR -- but it is
+# NOT evidence that 5e-4 specifically is necessary or optimal for this scope
+# (full-decoder FT), since the flat-val_loss observation that originally
+# motivated this specific value turned out (ISS-012) to be an artifact of
+# zero gradients ever reaching ANY parameter, not a bridge-LR-mismatch signal.
+# Kept as a plausible, low-risk optimization (matches the one data point where
+# this composition demonstrably learned) but not to be presented as proven
+# necessary until a real (non-zeroed) run's learning curve says otherwise.
+BRIDGE_PARAM_PATTERN = r"^perception\.proj\..+$"
+BRIDGE_LR = 5e-4
 
 # Dynamic loss-scale backoff/growth, same style as torch.amp.GradScaler
 # (backoff_factor=0.5, growth_factor=2.0) but with a much shorter
@@ -77,30 +123,73 @@ MAX_LOSS_SCALE = 65536.0
 
 
 class StableSALM(SALM):
+    def configure_optimizers(self):
+        # ISS-011 follow-up #3: split perception.proj (randomly-initialized
+        # bridge layer, see BRIDGE_LR comment above) into its own param group
+        # at BRIDGE_LR, everything else trainable stays at model.cfg.optimizer.lr.
+        # Modeled on NeMo's own configure_optimizers_exclude_norm_from_wd
+        # (nemo/collections/speechlm2/parts/optim_setup.py), which uses the
+        # same freeze_and_subset + id(param)-based re-grouping pattern.
+        trainable_ids = {id(p) for p in freeze_and_subset(
+            self.named_parameters(),
+            exclude_patterns=self.cfg.get("freeze_params", []),
+            keep_patterns=self.cfg.get("prevent_freeze_params", []),
+        )}
+        bridge_pattern = re.compile(BRIDGE_PARAM_PATTERN)
+        bridge_params, rest_params = [], []
+        for name, p in self.named_parameters():
+            if id(p) not in trainable_ids:
+                continue
+            (bridge_params if bridge_pattern.match(name) else rest_params).append(p)
+
+        if not bridge_params:
+            logging.warning(
+                f"configure_optimizers: no trainable params matched BRIDGE_PARAM_PATTERN="
+                f"{BRIDGE_PARAM_PATTERN!r} -- the bridge-layer LR split is inactive this run "
+                f"(all trainable params will use model.cfg.optimizer.lr)."
+            )
+        logging.info(
+            f"configure_optimizers: {len(bridge_params)} bridge params @ lr={BRIDGE_LR}, "
+            f"{len(rest_params)} other trainable params @ lr={self.cfg.optimizer.lr} (default)."
+        )
+
+        optim_groups = [
+            {"params": bridge_params, "lr": BRIDGE_LR},
+            {"params": rest_params},
+        ]
+        optimizer = hydra.utils.instantiate(self.cfg.optimizer, optim_groups, _convert_="all")
+        ans = {"optimizer": optimizer}
+        if "lr_scheduler" in self.cfg:
+            lr_scheduler = hydra.utils.instantiate(self.cfg.lr_scheduler, optimizer)
+            ans["lr_scheduler"] = {"scheduler": lr_scheduler, "interval": "step", "frequency": 1}
+        return ans
+
     def training_step(self, batch: dict, batch_idx: int):
         ans = super().training_step(batch, batch_idx)
         # ans["loss"] was already logged (unscaled, real units) inside
-        # SALM.training_step via self.log_dict -- only the RETURNED loss
-        # (used for backward) needs scaling. Read the live scale off the
-        # optimizer (single source of truth) rather than a local constant,
-        # since on_before_optimizer_step adjusts it every step.
+        # SALM.training_step via self.log_dict -- but that's also invisible,
+        # since this config runs with trainer.logger: False (same gap
+        # on_before_optimizer_step's grad-norm logging already worked around).
+        # Print it directly so the gate-redesign's acceptance criterion
+        # (train loss trending down, not just a noisy val_loss snapshot --
+        # see ISS-011 follow-up #3) has something to check against.
+        train_loss = ans["loss"].detach()
+        if torch.distributed.get_rank() == 0 and batch_idx % 8 == 0:
+            logging.info(f"training_step: batch_idx={batch_idx} train_loss_unscaled={train_loss.item():.6g}")
+        # Only the RETURNED loss (used for backward) needs scaling. Read the
+        # live scale off the optimizer (single source of truth) rather than
+        # a local constant, since on_before_optimizer_step adjusts it every step.
         ans = dict(ans)
         ans["loss"] = ans["loss"] * self.optimizers().loss_scale
         return ans
 
-    def configure_gradient_clipping(self, optimizer, gradient_clip_val=None, gradient_clip_algorithm=None):
-        # Ignore the passed-in / self.trainer.gradient_clip_val entirely --
-        # Trainer(gradient_clip_val=...) must be left unset (None) in the YAML
-        # for this override to be allowed to run at all (see GRADIENT_CLIP_VAL
-        # comment above). GRADIENT_CLIP_VAL is the single source of truth for
-        # the unscaled threshold; `optimizer` here is the raw MasterWeightAdamW
-        # instance (Lightning passes it directly to this hook), so its
-        # .loss_scale is always current.
-        self.clip_gradients(
-            optimizer,
-            gradient_clip_val=GRADIENT_CLIP_VAL * optimizer.loss_scale,
-            gradient_clip_algorithm=gradient_clip_algorithm or "norm",
-        )
+    # ISS-012: configure_gradient_clipping is intentionally NOT overridden.
+    # Lightning's default implementation calls self.clip_gradients() using
+    # self.trainer.gradient_clip_val, which the YAML leaves unset (0/None) --
+    # so the default hook is already a true no-op. Clipping now happens
+    # entirely inside on_before_optimizer_step, folded into
+    # MasterWeightAdamW's existing fp32 divide (see grad_divisor below),
+    # never touching a raw fp16 gradient tensor with the clip coefficient.
 
     def on_before_optimizer_step(self, optimizer):
         # ISS-011 follow-up: an earlier version of this hook called
@@ -115,6 +204,10 @@ class StableSALM(SALM):
         # that already-global result -- never on a per-rank local value.
         params = [p for g in optimizer.param_groups for p in g["params"] if p.grad is not None]
 
+        # ISS-012: this all-reduce is the ONLY place a global gradient norm is
+        # ever computed, and it does so entirely in fp32 (gf = g.float()
+        # below) -- unlike Lightning's native clip path, this cannot overflow
+        # at realistic gradient magnitudes (fp32 max ~3.4e38).
         local_bad = torch.zeros((), device=self.device, dtype=torch.float32)
         local_sq = torch.zeros((), device=self.device, dtype=torch.float32)
         for p in params:
@@ -127,10 +220,20 @@ class StableSALM(SALM):
         flags = torch.stack([local_bad, local_sq])
         torch.distributed.all_reduce(flags, op=torch.distributed.ReduceOp.SUM)
         any_nonfinite = bool(flags[0].item() > 0.0)
-        # flags[1] is the sum of squared *scaled* grads (scaled by the loss_scale
-        # that was in effect when this step's backward() ran, i.e. the current
-        # value below, since it hasn't been mutated yet this step).
-        grad_norm_unscaled = float(flags[1].sqrt().item()) / optimizer.loss_scale
+        # loss_scale_used is captured BEFORE any mutation below, since it's the
+        # scale that was actually in effect when this step's backward() ran
+        # (ISS-012 logging fix: the previous version read optimizer.loss_scale
+        # again after mutating it, so on backoff/growth steps the logged
+        # scale didn't match the scale the norm was actually computed under).
+        loss_scale_used = optimizer.loss_scale
+        # flags[1] is the sum of squared *scaled* grads; on a skipped
+        # (any_nonfinite) step this is contaminated by nan_to_num zeroing out
+        # the nonfinite contributions, so it's NOT a real norm -- must not be
+        # logged as one (ISS-012 logging fix #2: the previous version logged
+        # this garbage value on skip steps, and DEC-009's GRADIENT_CLIP_VAL
+        # calibration was partly derived from exactly these contaminated
+        # entries).
+        grad_norm_unscaled = float(flags[1].sqrt().item()) / loss_scale_used if not any_nonfinite else float("nan")
 
         # ISS-011 follow-up #2 (Opus consult, 2026-09-09): Gate 1 v6/v7 measured
         # a 14-20% non-finite rate under a *static* loss_scale, ~150-400x above
@@ -149,16 +252,39 @@ class StableSALM(SALM):
         # and adjust optimizer.loss_scale with the same backoff/growth policy
         # GradScaler uses, so the scale self-calibrates to whatever this
         # model's gradients actually tolerate.
+        clip_coef = float("nan")
         if any_nonfinite:
             for p in params:
                 p.grad = None
             optimizer.loss_scale = max(optimizer.loss_scale * LOSS_SCALE_BACKOFF_FACTOR, MIN_LOSS_SCALE)
             optimizer._consecutive_clean_steps = 0
+            optimizer.grad_divisor = optimizer.loss_scale
         else:
             optimizer._consecutive_clean_steps = getattr(optimizer, "_consecutive_clean_steps", 0) + 1
             if optimizer._consecutive_clean_steps >= LOSS_SCALE_GROWTH_INTERVAL:
                 optimizer.loss_scale = min(optimizer.loss_scale * LOSS_SCALE_GROWTH_FACTOR, MAX_LOSS_SCALE)
                 optimizer._consecutive_clean_steps = 0
+
+            # ISS-012: fold gradient clipping into the fp32 divide MasterWeightAdamW
+            # already performs, instead of a separate fp16-native Lightning clip
+            # call. clip_coef is computed from the fp32 grad_norm_unscaled above
+            # (never from a raw fp16 tensor), so it cannot suffer the DTensor
+            # local-norm-squared-in-fp16 overflow that caused ISS-012.
+            # Equivalent to clipping the unscaled gradient to GRADIENT_CLIP_VAL,
+            # then having the optimizer divide by loss_scale_used, in one fp32 op:
+            # optimizer.step() will do grad.float() / grad_divisor, where
+            # grad_divisor = loss_scale_used / clip_coef.
+            clip_coef = min(1.0, GRADIENT_CLIP_VAL / (grad_norm_unscaled + 1e-12))
+            optimizer.grad_divisor = loss_scale_used / clip_coef
+
+            # ISS-012 correctness tripwire: after the first real (non-skipped)
+            # optimizer step, verify at least one trainable parameter's
+            # exp_avg is actually nonzero -- i.e. a real update happened. This
+            # exact class of bug (gradients silently zeroed between
+            # measurement and use) went undetected for three full gate runs
+            # because nothing checked this. Checked once, not every step.
+            if not getattr(optimizer, "_verified_first_real_update", False):
+                optimizer._pending_first_update_check = True
 
         # self.log() here is a no-op for calibration purposes: this config
         # runs with trainer.logger: False, so nothing ever persists these
@@ -168,8 +294,41 @@ class StableSALM(SALM):
         if torch.distributed.get_rank() == 0:
             logging.info(
                 f"on_before_optimizer_step: grad_norm_unscaled={grad_norm_unscaled:.6g} "
-                f"loss_scale={optimizer.loss_scale:.1f} skipped={any_nonfinite}"
+                f"loss_scale_used={loss_scale_used:.1f} loss_scale_next={optimizer.loss_scale:.1f} "
+                f"clip_coef={clip_coef:.6g} skipped={any_nonfinite}"
             )
+
+    def on_before_zero_grad(self, optimizer):
+        # ISS-012 correctness tripwire (part 2): fires after optimizer.step(),
+        # so by now a real update (if any_nonfinite was False last step) has
+        # already happened. Verify it actually did.
+        if getattr(optimizer, "_pending_first_update_check", False):
+            optimizer._pending_first_update_check = False
+            # exp_avg is a DTensor (sharded, since it's built from p.detach().clone()
+            # on an FSDP2-sharded parameter) -- torch.count_nonzero has no registered
+            # DTensor sharding strategy, so this must operate on the LOCAL shard only
+            # (.to_local()). This is a per-rank check, not a global all-reduce, and
+            # that's fine for a tripwire: if THIS rank's local shard moved, gradients
+            # reached the optimizer on this rank, which is exactly what's being
+            # verified. Deliberately not adding another collective here.
+            any_nonzero = any(
+                torch.count_nonzero(
+                    state["exp_avg"].to_local() if isinstance(state["exp_avg"], DTensor) else state["exp_avg"]
+                ).item() > 0
+                for state in optimizer.state.values()
+                if "exp_avg" in state
+            )
+            if not any_nonzero:
+                raise RuntimeError(
+                    "ISS-012 tripwire: first non-skipped optimizer step completed but every "
+                    "trainable parameter's exp_avg is still exactly zero -- gradients are being "
+                    "lost somewhere between on_before_optimizer_step and MasterWeightAdamW.step(). "
+                    "This is the exact failure class that silently invalidated Gate 1 v8 / Gate 2 "
+                    "v2 / Gate 2 v3 (see research_log/ISSUES.md ISS-012). Do not proceed."
+                )
+            optimizer._verified_first_real_update = True
+            if torch.distributed.get_rank() == 0:
+                logging.info("ISS-012 tripwire: PASSED -- confirmed a real (nonzero) optimizer update occurred.")
 
 
 @hydra_runner(config_path="conf", config_name="salm")

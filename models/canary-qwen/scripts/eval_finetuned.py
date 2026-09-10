@@ -38,7 +38,29 @@ def main():
     from nemo.collections.speechlm2.models import SALM
     print('Loading model...')
     model = SALM.from_pretrained('nvidia/canary-qwen-2.5b')
-    model.load_state_dict(state, strict=False)
+    # ISS-013 (2026-09-10): strict=False was previously silently discarding
+    # missing/unexpected keys. The base model here is the RELEASED
+    # canary-qwen-2.5b (LoRA-shaped LLM keys, e.g.
+    # llm.base_model.model.model.layers.*), but a non-LoRA full-decoder-FT
+    # checkpoint (e.g. S3-B3) has plain llm.model.layers.* keys -- a
+    # structural mismatch under which strict=False would let the ENTIRE LLM
+    # silently fail to load, and this script would then report the
+    # RELEASED model's WER as if it were the trained checkpoint's. Assert on
+    # the actual incompatibility lists instead of discarding them.
+    load_result = model.load_state_dict(state, strict=False)
+    n_missing, n_unexpected = len(load_result.missing_keys), len(load_result.unexpected_keys)
+    print(f'load_state_dict: {n_missing} missing keys, {n_unexpected} unexpected keys')
+    if n_missing:
+        print(f'  missing (first 10): {load_result.missing_keys[:10]}')
+    if n_unexpected:
+        print(f'  unexpected (first 10): {load_result.unexpected_keys[:10]}')
+    assert n_missing + n_unexpected <= 5, (
+        f'ISS-013: {n_missing} missing + {n_unexpected} unexpected keys when loading '
+        f'{args.checkpoint} onto nvidia/canary-qwen-2.5b -- this looks like a structural '
+        f'mismatch (e.g. LoRA-shaped base model vs a plain full-parameter checkpoint), not '
+        f'a handful of harmless buffer differences. Evaluating anyway would silently report '
+        f"the BASE model's performance, not this checkpoint's. See research_log/ISSUES.md ISS-013."
+    )
     model.cuda().eval()
 
     samples = [json.loads(l) for l in open(args.test_manifest)]

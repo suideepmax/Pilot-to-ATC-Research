@@ -62,7 +62,9 @@ Initialized: 2026-09-06. All records below were recovered from existing reposito
 - ISS-008 — No gender-stratified Canary-Qwen lhotse cuts exist yet for ATCOSIM speaker-independent evaluation [OPEN]
 - ISS-009 — FULLY RESOLVED (2026-09-08): v3 checkpoint's config AND WER both verified genuine (20.70%, matches HF + author's own record). Earlier "doesn't reproduce" conclusion was a caching-bug artifact [see VAL-012]
 - ISS-010 — v1/v3 share explicit_log_dir (framework-confirmed collision risk); train_canary_v1/v2.sh depend on an undocumented manual `cp` step not yet performed; REPLICATION_GUIDE.md §2.11 has a stale `rm -rf` that would delete v1+v3 checkpoints [OPEN]
-- ISS-011 — CRITICAL: fp16 AdamW is numerically degenerate (SGD@lr/eps in disguise) in every Canary-Qwen run; caused S3-B3's divergence to inf; weight_decay has been inert in v1/v2/v3 (v3's gain is SpecAugment+dropout only, not weight_decay); tied-embedding untied by FSDP2 [OPEN, fix designed]
+- ISS-011 — CRITICAL: fp16 AdamW is numerically degenerate (SGD@lr/eps in disguise) in every Canary-Qwen run; caused S3-B3's divergence to inf; weight_decay has been inert in v1/v2/v3 (v3's gain is SpecAugment+dropout only, not weight_decay); tied-embedding untied by FSDP2 [OPEN, fix designed; Gate 1/2 validation runs superseded by ISS-012]
+- ISS-012 — CRITICAL: gradient clipping silently zeroed 100% of gradients in Gate 1 v8/Gate 2 v2/Gate 2 v3 (fp16 DTensor norm-reduction overflow) — those runs took zero real optimizer steps; invalidates the flat-val_loss/bridge-LR finding and DEC-009's clip-value calibration [DIAGNOSED, fix designed]
+- ISS-013 — HIGH: no Canary-Qwen run in this project (v1/v2/v3 or S3-B3) actually fine-tunes the released nvidia/canary-qwen-2.5b checkpoint (modality bridge always randomly re-initialized) — PARTIALLY RESOLVED: direct load-check confirms v1/v3's eval (0 missing/unexpected keys each) genuinely evaluated their own trained weights, not the released model; eval_finetuned.py now asserts on this for any future S3-B3 checkpoint [PARTIALLY RESOLVED]
 
 ## Environment
 - ENV-001 — System hardware (4x RTX 2080 Ti, 11GB each, no sudo, Ubuntu 24)
