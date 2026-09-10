@@ -25,6 +25,7 @@ Initialized: 2026-09-06. All records below were recovered from existing reposito
 - VAL-013 — S4-FAIR: Canary-Qwen v1 + in-domain KenLM (N-best rescore) closes only ~1.5 WER points (23.32%->21.79%); fairness fix does not explain the W2V2-Canary gap
 - VAL-014 — S4-FAIR: Canary-Qwen v3 + in-domain KenLM (N-best rescore) provides NO benefit (20.14% vs 19.42% beam-only, worse) — negative result, reported as-is
 - VAL-015 — Gate 2 (500-step, production settings) PASS: first confirmed genuine gradient-driven learning after ISS-012's clip fix — val_loss 4.828→0.875 monotonic over real held-out data, 0.6% skip rate, checkpoint-verified real weight movement
+- VAL-016 — Bridge-LR ablation: BRIDGE_LR=5e-4 confirmed necessary, not just plausible — uniform lr=1e-5 plateaus at val_loss 1.715 (2x worse than Gate 2's 0.875), both runs otherwise trained successfully
 
 ## Decisions
 - DEC-001 — Discard ATCOSIM gender-based WER results; require a re-split for speaker independence
