@@ -377,3 +377,29 @@ Conclusion: Unlike v1, KenLM rescoring does **not** help v3 — WER increases mo
 Remaining Risks: Same as [[VAL-013]] (alpha not tuned on a separate dev split). The negative result here is more likely to be robust precisely because it does not depend on picking a favorable alpha — it holds across the entire sweep above alpha=0.1.
 
 Related Records: [[VAL-013]], [[VAL-012]], [[VAL-008]]
+
+## VAL-015 — Gate 2 (500-step, production settings) PASS: first confirmed genuine learning on S3-B3's real held-out test set, after ISS-012's clip fix
+
+Date: 2026-09-10
+Status: COMPLETE, PASS
+
+Objective: Validate ISS-012's gradient-clipping fix (and, by extension, ISS-011's fp32 master-weight optimizer, never previously tested on a run that took real gradient steps) at a scale beyond tiny diagnostics -- production `salm_uwb_atcc_s3b3_fixed.yaml` settings (`accumulate_grad_batches=8`, full UWB-ATCC train/val data, early stopping enabled with the corrected `min_delta=0.0`), 500 optimizer steps, `warmup_steps=100` (matching the production config's 2000/10000=20% warmup ratio scaled to this budget).
+
+Inputs / Configuration: `models/canary-qwen/scripts/salm_uwb_atcc_s3b3_fixed.yaml` deployed unmodified except CLI overrides `trainer.max_steps=500 model.lr_scheduler.warmup_steps=100`; `salm_train_stable.py`/`master_weight_adamw.py` as committed in `2dc853e` (post ISS-012 fix); 4x RTX 2080 Ti FSDP2; `exp_manager.explicit_log_dir=~/canary-ft/experiments_s3b3_gate2_real/`.
+
+Procedure: Launched via `torchrun --nproc_per_node=4`, monitored to completion (~3h13m wall clock), then independently verified the saved checkpoint (`step=500.ckpt`) by (a) counting nonzero `exp_avg` tensors in the optimizer state and (b) diffing model weights against a freshly-loaded pretrained `Qwen/Qwen3-1.7B` — the same ground-truth method that proved Gate 1 v8/Gate 2 v2/Gate 2 v3 had performed zero updates ([[ISS-012]]).
+
+Expected Result: If the fix works, val_loss should show a real, non-flat improvement trajectory on genuine held-out data (not the frozen-model 12.4-19.9 range every pre-fix gate produced), gradient clipping should engage rarely (well under the 100% zeroing rate ISS-012 found), and the checkpoint diff should show nonzero, non-trivial weight movement.
+
+Actual Result: **All three confirmed.**
+- val_loss across 16 validation checkpoints (every 250 batches / ~31 optimizer steps): 4.828 -> 2.975 -> 2.472 -> 2.189 -> 2.038 -> 1.768 -> 1.533 -> 1.342 -> 1.165 -> 1.070 -> 1.005 -> 0.936 -> 0.910 -> 0.887 -> 0.879 -> 0.875 (final, step 500). Monotonic, zero regressions, naturally decelerating -- the classic shape of a real learning curve, not noise. Already inside the same order of magnitude as v1's fully-converged 10000-step val_loss (~0.68) and v3's (~0.58), reached in 5% of the step budget.
+- Gradient-clip skip rate: 3/500 steps (0.6%) -- comfortably under Opus's original <1% target, and a categorical improvement over ISS-012's measured 100% zeroing rate on the exact same config pre-fix. Dynamic loss scale calibrated from 1024 down to 128 in the first 4 steps, then held stable with `clip_coef=1` (no clipping needed) for the remainder.
+- Checkpoint diff: 311/311 optimizer states have nonzero `exp_avg`; sampled model weights (`llm.model.layers.0.self_attn.q_proj.weight`, `llm.model.layers.15.mlp.down_proj.weight`) show real movement from pretrained init (maxabsdiff 4.6e-4 to 8.5e-4, scaling up consistently from Gate 1 v10's 20-step diff of 1.2e-4, as expected for 25x more steps).
+
+Evidence: `/home/kotasthane/canary-ft/experiments_s3b3_gate2_real/` (full logs, checkpoints, `exp_config.yaml`); direct checkpoint inspection via `torch.distributed.checkpoint.format_utils.dcp_to_torch_save` + `transformers.AutoModelForCausalLM.from_pretrained('Qwen/Qwen3-1.7B')` diff, same method as [[ISS-012]]'s falsification of the prior three gates.
+
+Result: **PASS**. This is the first run in the entire ISS-011/ISS-012 investigation to demonstrate confirmed, checkpoint-verified, genuine gradient-driven learning at more than a toy scale. Both the fp32 master-weight optimizer (ISS-011/[[DEC-009]]) and the folded-clip fix (ISS-012) are now validated together, not just individually in isolation.
+
+Remaining Risks: Only 500 of the eventual 10000 production steps validated; dynamic loss-scale behavior at later stages (growth back up past 128, and whether skip rate stays low as training progresses and gradients potentially shrink) not yet observed. `BRIDGE_LR=5e-4`'s actual necessity still untested (see planned bridge-LR ablation). Gate 3 (2500 steps) is the next, more decisive validation before committing to the full run.
+
+Related Records: [[ISS-011]], [[ISS-012]], [[ISS-013]], [[DEC-009]]

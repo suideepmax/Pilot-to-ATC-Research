@@ -24,6 +24,7 @@ Initialized: 2026-09-06. All records below were recovered from existing reposito
 - VAL-012 — FINAL: v1 (23.32%), v2 (23.82%), v3 (20.70%) all verified genuine via real inference, cross-checked against independent HuggingFace downloads and author's own result records — root cause of earlier confusion was a fixed-path caching collision in eval_finetuned.py
 - VAL-013 — S4-FAIR: Canary-Qwen v1 + in-domain KenLM (N-best rescore) closes only ~1.5 WER points (23.32%->21.79%); fairness fix does not explain the W2V2-Canary gap
 - VAL-014 — S4-FAIR: Canary-Qwen v3 + in-domain KenLM (N-best rescore) provides NO benefit (20.14% vs 19.42% beam-only, worse) — negative result, reported as-is
+- VAL-015 — Gate 2 (500-step, production settings) PASS: first confirmed genuine gradient-driven learning after ISS-012's clip fix — val_loss 4.828→0.875 monotonic over real held-out data, 0.6% skip rate, checkpoint-verified real weight movement
 
 ## Decisions
 - DEC-001 — Discard ATCOSIM gender-based WER results; require a re-split for speaker independence
