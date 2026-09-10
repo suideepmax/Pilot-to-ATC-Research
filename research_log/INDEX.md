@@ -61,6 +61,7 @@ Initialized: 2026-09-06. All records below were recovered from existing reposito
 - ISS-008 — No gender-stratified Canary-Qwen lhotse cuts exist yet for ATCOSIM speaker-independent evaluation [OPEN]
 - ISS-009 — FULLY RESOLVED (2026-09-08): v3 checkpoint's config AND WER both verified genuine (20.70%, matches HF + author's own record). Earlier "doesn't reproduce" conclusion was a caching-bug artifact [see VAL-012]
 - ISS-010 — v1/v3 share explicit_log_dir (framework-confirmed collision risk); train_canary_v1/v2.sh depend on an undocumented manual `cp` step not yet performed; REPLICATION_GUIDE.md §2.11 has a stale `rm -rf` that would delete v1+v3 checkpoints [OPEN]
+- ISS-011 — CRITICAL: fp16 AdamW is numerically degenerate (SGD@lr/eps in disguise) in every Canary-Qwen run; caused S3-B3's divergence to inf; weight_decay has been inert in v1/v2/v3 (v3's gain is SpecAugment+dropout only, not weight_decay); tied-embedding untied by FSDP2 [OPEN, fix designed]
 
 ## Environment
 - ENV-001 — System hardware (4x RTX 2080 Ti, 11GB each, no sudo, Ubuntu 24)
