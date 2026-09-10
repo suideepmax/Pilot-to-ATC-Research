@@ -197,3 +197,25 @@ Reason: User instruction, directly motivated by this session's confusion (the ol
 Consequences: `REPLICATION_GUIDE.md` and `models/canary-qwen/docs/PROGRESS.md` updated to reference new filenames. The stale `params_trained_pct: 32.8` value in the renamed v2 results JSON was also corrected to 29.2 while it was being touched (long-standing [[ISS-004]] gap, now closed for this file).
 
 Related Records: [[VAL-012]], [[ISS-004]], [[ISS-007]]
+
+## DEC-009 — Fix fp16 AdamW degeneracy with a custom fp32 master-weight optimizer, not bf16 or 16-mixed
+
+Date: 2026-09-09
+Status: DECIDED and IMPLEMENTED; correctness not yet fully verified (Gate 1 revalidation in progress)
+
+Question: [[ISS-011]] found that `precision: 16-true` makes plain `torch.optim.AdamW` numerically degenerate (exp_avg_sq underflows to exactly zero, collapsing AdamW into SGD at lr/eps). Three fixes were available for this hardware (4x RTX 2080 Ti, Turing architecture, no sudo): switch to bf16, switch to `16-mixed` (PyTorch AMP's built-in GradScaler), or keep fp16 storage but do the optimizer math in fp32 via a custom optimizer. Which one?
+
+Evidence considered:
+- bf16 measured directly on this hardware: 7.6x slower per matmul than fp16 (18.6ms vs 2.5ms) — Turing has no native bf16 tensor-core path, so it falls back to a much slower emulated route. Ruled out on cost alone for a model already GPU-hour constrained.
+- `16-mixed` (Lightning's wrapper around `torch.amp.GradScaler`) is not in `ModelParallelStrategy`'s allowed precision list (only `32-true`, `bf16-mixed`, `bf16-true`, `16-true` are accepted) — this strategy is required for FSDP2 sharding of a 2.5B-parameter model across 4x 11GB GPUs, so `16-mixed` is not reachable without also abandoning FSDP2.
+- A custom fp32-master-weight optimizer keeps `16-true` (fast, FSDP2-compatible) while doing the actual AdamW arithmetic (moments, weight decay, parameter update) in fp32, which is the same principle GradScaler + fp32 master weights use in mixed precision, just implemented manually since NeMo/Lightning don't expose that combination for `16-true` here.
+
+Decision: Implement `MasterWeightAdamW` (fp32 shadow copies of params/exp_avg/exp_avg_sq, manual loss-scale division) plus a `StableSALM` subclass handling the loss scaling, scaled gradient clipping, and non-finite-gradient detection that a real GradScaler would otherwise provide. See `models/canary-qwen/scripts/master_weight_adamw.py` and `salm_train_stable.py`.
+
+Reason: Only option that is both fast (no bf16 tax) and compatible with the sharding strategy this model size requires on this hardware. The added complexity (hand-rolled loss scaling, hand-rolled non-finite handling) is the direct cost of that combination, not implemented for its own sake.
+
+Consequences: This is now a real maintenance surface — three places (training_step, configure_gradient_clipping, on_before_optimizer_step) must all read/write the same live `loss_scale` value or they silently drift out of sync (a bug already caught once this session, see [[ISS-011]] follow-up notes). Any future change to precision strategy or GPU generation (e.g. moving to Ampere+/native bf16 hardware) should revisit whether this custom optimizer is still needed or whether `16-mixed`/bf16 becomes viable again.
+
+Rejected Alternatives: bf16 (too slow on this hardware, measured); `16-mixed` (incompatible with `ModelParallelStrategy`, the FSDP2 strategy this model size requires).
+
+Related Records: [[ISS-011]]

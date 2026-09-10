@@ -34,6 +34,7 @@ Initialized: 2026-09-06. All records below were recovered from existing reposito
 - DEC-006 — Drop data-scale and cross-corpus studies from the P0/P1 execution-ready program (focus discipline)
 - DEC-007 — Drop the ambiguous "research-optimized" (3e-5) Canary-Qwen ablation from the active manuscript/research record
 - DEC-008 — Rename Canary-Qwen UWB-ATCC configs/scripts/results to canonical v1/v2/v3 scheme
+- DEC-009 — Fix fp16 AdamW degeneracy with a custom fp32 master-weight optimizer, not bf16 (7.6x slower, measured) or 16-mixed (incompatible with ModelParallelStrategy)
 
 ## Experiments
 - EXP-001 — UWB-ATCC W2V2-large fine-tuning (Phase 4) — 14.54%/12.69% WER [COMPLETE]
