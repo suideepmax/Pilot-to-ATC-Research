@@ -218,4 +218,6 @@ Consequences: This is now a real maintenance surface — three places (training_
 
 Rejected Alternatives: bf16 (too slow on this hardware, measured); `16-mixed` (incompatible with `ModelParallelStrategy`, the FSDP2 strategy this model size requires).
 
-Related Records: [[ISS-011]]
+**Update (2026-09-10, see [[ISS-012]])**: the core decision here (fp32 master-weight optimizer over bf16/16-mixed) is unaffected and stands. However, a separate bug (Lightning's native gradient-clipping path bypassing this optimizer's fp32 math entirely, silently zeroing gradients via an fp16 DTensor norm-reduction overflow) meant every validation run since this decision was made took zero real optimizer steps -- so "correctness not yet fully verified" in the Status line above is more true than it appeared: nothing has actually verified this optimizer's core AdamW-in-fp32 math against real, non-zeroed gradients yet. That remains outstanding pending ISS-012's clip fix.
+
+Related Records: [[ISS-011]], [[ISS-012]]

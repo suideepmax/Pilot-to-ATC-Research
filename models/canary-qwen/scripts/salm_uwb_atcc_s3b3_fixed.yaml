@@ -135,7 +135,12 @@ data:
     sample_rate: 16000
     batch_size: 1
     seed: 1234
-    shard_seed: "randomized"
+    # Fixed (was "randomized"): ISS-011 follow-up #3 -- Gate 1/2 best-score
+    # val_loss spanned 12.418-12.848 (~0.2-0.4 spread) across otherwise
+    # near-identical short runs purely from which 50 utterances got sampled
+    # each time. A fixed shard_seed makes every validation pass see the same
+    # subset, so check-to-check differences reflect the model, not the sample.
+    shard_seed: 1234
 
 exp_manager:
   exp_dir: null
@@ -152,6 +157,16 @@ exp_manager:
   early_stopping_callback_params:
     monitor: val_loss
     mode: min
+    # REVERTED 0.3 -> 0.0 (2026-09-10, external review + user correction):
+    # raising min_delta was backwards reasoning. For Lightning's EarlyStopping
+    # in mode='min', a LARGER min_delta requires a BIGGER decrease to count as
+    # "improvement" -- so it makes premature stopping on real-but-modest gains
+    # MORE likely, not less. The original intent (don't stop purely on
+    # validation-sampling noise) is better served by leaving min_delta at 0.0
+    # and, for short diagnostic/gate runs specifically, overriding
+    # exp_manager.create_early_stopping_callback=false via the CLI instead of
+    # tuning this threshold -- diagnostic runs should run their full step
+    # budget regardless of val_loss behavior, per ISS-012.
     min_delta: 0.0
     patience: 3
     check_finite: true

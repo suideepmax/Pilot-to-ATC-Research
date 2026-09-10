@@ -1,10 +1,23 @@
 # Canary-Qwen-2.5B Fine-Tuning Progress
 
 ## Model
-- nvidia/canary-qwen-2.5b (2.87B total parameters)
-- Architecture: SALM (FastConformer encoder + Qwen3-1.7B LLM decoder)
+- **Corrected 2026-09-10 (see research_log/ISSUES.md ISS-013)**: this is NOT the released
+  `nvidia/canary-qwen-2.5b` checkpoint fine-tuned in place. Every config in this project
+  (v1/v2/v3 and the newer S3-B3 track) builds a SALM by composing `pretrained_llm:
+  Qwen/Qwen3-1.7B` + `pretrained_asr: nvidia/canary-1b-flash` via NeMo's speechlm2
+  recipe, with `perception.proj` (the modality-adapter projection connecting the two)
+  left at random initialization -- `canary-1b-flash`'s own checkpoint has no such layer,
+  and this project's training scripts never load the released `canary-qwen-2.5b`
+  checkpoint (which does contain a trained projection) to initialize it.
+- Architecturally the same design as `nvidia/canary-qwen-2.5b` (FastConformer encoder +
+  Qwen3-1.7B LLM decoder, SALM composition), but a separately-assembled instance with
+  its own (randomly-initialized, then trained) modality projection -- not the released
+  model's weights for that component.
 - Training: LoRA on LLM + modality adapter (27.8M trainable = 0.97%)
 - Framework: NVIDIA NeMo 2.8.0rc0 (speechlm2)
+- **Evaluation provenance not yet audited** for this distinction (ISS-013, OPEN) --
+  do not treat any WER number below as verified-correct-checkpoint until that audit
+  completes.
 
 ## Environment
 - Conda env: canary_ft (Python 3.11)

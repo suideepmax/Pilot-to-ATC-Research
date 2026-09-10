@@ -16,11 +16,25 @@ are elementwise (no rank-changing reshapes).
 
 Loss-scale handling: gradients arriving in `p.grad` are assumed to be
 computed from a loss multiplied by `loss_scale` upstream (see
-salm_train_stable.py's StableSALM.training_step); this optimizer divides
-by `loss_scale` before applying the update. `loss_scale` is a mutable
+salm_train_stable.py's StableSALM.training_step). `loss_scale` is a mutable
 attribute so a caller (e.g. an on_before_optimizer_step hook) can
 implement dynamic loss scaling (halve on overflow, grow after N clean
 steps) without reconstructing the optimizer.
+
+Gradient clipping (ISS-011/ISS-012 follow-up): this optimizer divides by
+`grad_divisor`, NOT `loss_scale` directly, in its fp32 arithmetic below.
+`grad_divisor` defaults to `loss_scale` (plain unscaling, no clipping) but a
+caller can fold a global-norm clip coefficient in by setting
+`grad_divisor = loss_scale / clip_coef` before calling step() -- this makes
+gradient clipping happen as part of this optimizer's existing fp32 divide,
+rather than as a separate operation on the raw fp16 gradient tensor (which
+is what silently zeroed gradients under FSDP2/DTensor -- see ISS-012:
+Lightning's native clip path squares each rank's local gradient-shard norm
+IN FP16 before all-reducing, overflowing to inf at realistic magnitudes,
+collapsing the clip coefficient to 0). Never apply a clip coefficient by
+multiplying an already-fp16 gradient tensor -- verified empirically that
+this risks catastrophic underflow instead (typical coefficients here are
+~1e-3, which collapses most fp16 elements to exactly zero on write-back).
 """
 
 import torch
@@ -31,6 +45,9 @@ class MasterWeightAdamW(torch.optim.Optimizer):
         defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
         super().__init__(params, defaults)
         self.loss_scale = float(loss_scale)
+        # Defaults to loss_scale (no clipping) until a caller sets it based on
+        # a real global-norm measurement; see class docstring.
+        self.grad_divisor = float(loss_scale)
         self._had_overflow_this_step = False
 
     @torch.no_grad()
@@ -61,7 +78,7 @@ class MasterWeightAdamW(torch.optim.Optimizer):
                 # rank identically before this ever runs, so grads reaching
                 # this optimizer are always already finite.
                 grad = p.grad.detach()
-                grad = grad.float() / self.loss_scale
+                grad = grad.float() / self.grad_divisor
 
                 state = self.state[p]
                 if len(state) == 0:
