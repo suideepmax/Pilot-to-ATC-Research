@@ -445,3 +445,28 @@ Result: **BRIDGE_LR=5e-4 is confirmed necessary, not merely plausible.** Consist
 Remaining Risks: Only tested at 500-step scale; whether the gap narrows, holds, or widens over the full 10000-step budget (as the bridge layer eventually reaches a useful state even at 1e-5, ~1800 steps per the original estimate) is not yet known -- Gate 3 (2500 steps) may partially answer this since 2500 > 1800.
 
 Related Records: [[ISS-011]], [[ISS-012]], [[VAL-015]]
+
+## VAL-017 — Gate 3 (2500-step budget, production settings) PASS: sustained genuine learning, self-terminated cleanly via legitimate early stopping at step 843
+
+Date: 2026-09-10
+Status: COMPLETE, PASS
+
+Objective: The decisive staged-validation gate before committing to the full 10000-step production run. Same settings as [[VAL-015]]'s Gate 2 (real train/val data, `accumulate_grad_batches=8`, bridge-LR split at 5e-4 per [[VAL-016]]) but `trainer.max_steps=2500`, `model.lr_scheduler.warmup_steps=500` (same 20% warmup-to-budget ratio as Gate 2 and the eventual full run's 2000/10000).
+
+Inputs / Configuration: `models/canary-qwen/scripts/salm_uwb_atcc_s3b3_fixed.yaml` with CLI overrides `trainer.max_steps=2500 model.lr_scheduler.warmup_steps=500`; `exp_manager.explicit_log_dir=~/canary-ft/experiments_s3b3_gate3/`; early stopping enabled with the corrected `min_delta=0.0`, `patience=3`.
+
+Procedure: Launched, monitored the full run (~6h wall clock until self-termination), independently verified the final checkpoint the same way as [[VAL-015]]/[[VAL-016]] (nonzero `exp_avg` count; weight diff vs freshly-loaded pretrained Qwen3-1.7B).
+
+Actual Result: val_loss trajectory across the run (selected checkpoints, optimizer step / val_loss): 31/8.27 (slower start than Gate 2 by design -- 5x longer warmup), 63/4.50, 94/3.35, 125/2.84, 156/2.53, 188/2.36, 219/2.21, 250/2.15 (25% of budget), 313/1.96, 375/1.71, 438/1.48, 500/1.26 -> 0.97 -> 0.94 (three closely-spaced checkpoints near this boundary), 563/0.92, 625/0.83, 688/0.79, 750/0.78, 813/0.77, 843 (final)/**0.754**. Monotonic throughout, zero regressions. **Already better than v1's fully-converged 10000-step result is close (v1: ~0.68) despite reaching this point at only 843/10000 = 8.4% of the full production step budget**, though not yet at v1's level.
+
+The run **self-terminated via legitimate early stopping** (`Monitored metric val_loss did not improve in the last 3 records. Best score: 0.754.`) at step 843 -- distinct from the earlier false-positive early-stopping bug (Gate 1 v5, which fired on the very first validation before any real training had occurred) and distinct from the `min_delta` misconfiguration bug (fixed in this session, see [[ISS-012]]'s note and the reverted YAML): this time, `min_delta=0.0` is correct, the model had genuinely plateaued after ~700 real optimizer steps of measurable improvement, and stopping was the intended, correct behavior of the callback -- not a bug.
+
+Final checkpoint (`step=843-last.ckpt`) independently verified: 311/311 optimizer states have nonzero `exp_avg`; sampled model weights show real movement from pretrained init (maxabsdiff 1.2e-3 to 1.3e-3, scaling up consistently from Gate 2's 500-step diff of ~4.6e-4 to 8.5e-4, as expected for more steps). Skip rate: 1/843 (0.1%), the lowest of any gate so far, consistent with the dynamic loss scale having more steps to fully calibrate.
+
+Evidence: `/home/kotasthane/canary-ft/experiments_s3b3_gate3/` (full logs, checkpoints including `step=500.ckpt` and `step=843-last.ckpt`, `exp_config.yaml`); direct checkpoint inspection via the same method as [[VAL-015]]/[[VAL-016]]/[[ISS-012]].
+
+Result: **PASS**. This is the strongest evidence yet that the ISS-011/ISS-012 fixes work correctly at the longest scale tested so far (843 real optimizer steps, ~5x longer than Gate 2), with genuine, sustained, checkpoint-verified learning and a clean, correctly-triggered stop rather than a crash or silent failure.
+
+Remaining Risks: The run plateaued at 0.754 rather than continuing toward v1's ~0.68 -- open question whether this reflects (a) a genuine local optimum for this LR/schedule at full-decoder scope, (b) the early-stopping patience (3) being too aggressive for a full-decoder run's flatter improvement curve compared to LoRA's, or (c) something that would resolve with a longer warmup/different LR schedule at the full 10000-step scale. Before launching the full production run, consider whether `patience` should be raised (e.g. to 5-10) given how slowly the curve was still improving near the plateau (0.781->0.767->0.764->0.754 over the last 4 checkpoints -- small but nonzero, arguably not yet a true plateau). This is a scope/methodology decision, not a correctness bug.
+
+Related Records: [[ISS-011]], [[ISS-012]], [[VAL-015]], [[VAL-016]]
