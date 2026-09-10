@@ -403,3 +403,45 @@ Result: **PASS**. This is the first run in the entire ISS-011/ISS-012 investigat
 Remaining Risks: Only 500 of the eventual 10000 production steps validated; dynamic loss-scale behavior at later stages (growth back up past 128, and whether skip rate stays low as training progresses and gradients potentially shrink) not yet observed. `BRIDGE_LR=5e-4`'s actual necessity still untested (see planned bridge-LR ablation). Gate 3 (2500 steps) is the next, more decisive validation before committing to the full run.
 
 Related Records: [[ISS-011]], [[ISS-012]], [[ISS-013]], [[DEC-009]]
+
+## VAL-016 — Bridge-LR ablation: `BRIDGE_LR=5e-4` genuinely matters, not just a plausible-but-untested optimization
+
+Date: 2026-09-10
+Status: COMPLETE, decisive result
+
+Objective: [[ISS-011]] follow-up #3 / [[VAL-015]] left open whether the `perception.proj` bridge-layer LR split (5e-4 vs the decoder body's 1e-5) actually improves outcomes, or was a plausible-but-unproven carryover from v1/v3's LoRA-era hyperparameters. Test directly: identical config/steps/data to [[VAL-015]]'s Gate 2, except `+model.optimizer.bridge_lr=1e-5` (bridge layer trains at the same LR as everything else, disabling the split).
+
+Inputs / Configuration: Identical to [[VAL-015]] (`trainer.max_steps=500`, `model.lr_scheduler.warmup_steps=100`, same real train/val data) except the one added override. Note: the Hydra CLI override initially failed with `Could not override 'model.optimizer.bridge_lr' ... Key 'bridge_lr' is not in struct` -- fixed by using `+model.optimizer.bridge_lr=1e-5` (the `+` prefix is required to add a key not already present in the base config's struct). `configure_optimizers` log line confirmed the fix took effect: `2 bridge params @ lr=1e-05, 309 other trainable params @ lr=1e-05`.
+
+Procedure: Same as [[VAL-015]] -- launch, monitor to completion, independently verify the checkpoint (nonzero `exp_avg` check; skipped the weight-diff-vs-pretrained check here since [[VAL-015]] and Gate 1 v10 already established that check's validity for this exact code path).
+
+Actual Result: Both runs started statistically identically (step-1 val_loss: 4.807 ablation vs 4.828 Gate 2, essentially noise) but diverged sharply as training progressed:
+
+| Checkpoint (opt. steps) | Gate 2 (bridge_lr=5e-4) | Ablation (bridge_lr=1e-5) | Gap |
+|---|---|---|---|
+| ~31 | 4.828 | 4.807 | -0.02 |
+| ~62 | 2.975 | 2.934 | -0.04 |
+| ~94 | 2.472 | 2.437 | -0.04 |
+| 125 | 2.189 | 2.192 | +0.00 |
+| 156 | 2.038 | 2.077 | +0.04 |
+| 188 | 1.768 | 2.039 | +0.27 |
+| 219 | 1.533 | 1.938 | +0.41 |
+| 250 | 1.342 | 1.905 | +0.56 |
+| 281 | 1.165 | 1.855 | +0.69 |
+| 313 | 1.070 | 1.833 | +0.76 |
+| 344 | 1.005 | 1.792 | +0.79 |
+| 375 | 0.936 | 1.760 | +0.82 |
+| 406 | 0.910 | 1.735 | +0.83 |
+| 438 | 0.887 | 1.726 | +0.84 |
+| 469 | 0.879 | 1.716 | +0.84 |
+| 500 (final) | **0.875** | **1.715** | **+0.84** |
+
+The ablation clearly plateaued in the second half of training (improvements shrank to ~0.01/checkpoint from step ~375 onward, vs Gate 2 which was still improving meaningfully), while Gate 2 kept improving throughout. Final Gate 2 val_loss is roughly half the ablation's. Both runs completed cleanly (no crashes, no divergence) with low, comparable skip rates (Gate 2: 3/500 = 0.6%; ablation: 1/500 = 0.2%) and checkpoint-verified real updates (311/311 nonzero `exp_avg` for both) -- the gap is not an artifact of one run being broken, both trained successfully, one just converges much better.
+
+Evidence: `/home/kotasthane/canary-ft/experiments_s3b3_gate2_real/` and `/home/kotasthane/canary-ft/experiments_s3b3_ablation_bridgelr/` (full logs, checkpoints, exp_configs); direct checkpoint optimizer-state inspection for both.
+
+Result: **BRIDGE_LR=5e-4 is confirmed necessary, not merely plausible.** Consistent with the theoretical argument in ISS-011 follow-up #3 (a randomly-initialized layer needs a proportionally larger LR to escape random init in a comparable number of steps) -- the ablation's plateau is exactly the signature of the bridge layer failing to adapt fast enough at the shared 1e-5 rate, capping how well the rest of the model can compensate. Keep the per-group LR split for Gate 3 and the full production run.
+
+Remaining Risks: Only tested at 500-step scale; whether the gap narrows, holds, or widens over the full 10000-step budget (as the bridge layer eventually reaches a useful state even at 1e-5, ~1800 steps per the original estimate) is not yet known -- Gate 3 (2500 steps) may partially answer this since 2500 > 1800.
+
+Related Records: [[ISS-011]], [[ISS-012]], [[VAL-015]]
