@@ -152,7 +152,7 @@ All training was done in `/home/kotasthane/w2v2-air-traffic` (the paper's repo c
 
 ## Canary Qwen (SALM) Results — ATCOSIM
 
-Fine-tuned `nvidia/canary-qwen-2.5b` (SALM: FastConformer encoder + Qwen3-1.7B LLM) on ATCOSIM. Two runs:
+Fine-tuned the `nvidia/canary-qwen-2.5b` architecture (SALM: FastConformer encoder + Qwen3-1.7B LLM), composed fresh from `Qwen/Qwen3-1.7B` + `nvidia/canary-1b-flash` with a randomly-initialized modality bridge rather than loaded from the released checkpoint (see `research_log/ISSUES.md` ISS-013), on ATCOSIM. Two runs:
 
 | Model | Trainable Params | WER | Notes |
 |-------|-----------------|-----|-------|

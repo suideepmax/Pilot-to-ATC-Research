@@ -196,7 +196,7 @@ Note: eval_model.py also has a bug (uses CTC-decoded labels as reference) that i
 ## Phase 5 - Canary Qwen Fine-tuning (NeMo SALM) [DONE]
 
 ### Model
-- Model: nvidia/canary-qwen-2.5b (SALM — Speech-Augmented Language Model)
+- Model: nvidia/canary-qwen-2.5b architecture (SALM — Speech-Augmented Language Model), composed fresh from Qwen/Qwen3-1.7B + nvidia/canary-1b-flash with a randomly-initialized modality bridge, not loaded from the released checkpoint (see `research_log/ISSUES.md` ISS-013)
 - Architecture: FastConformer (nvidia/canary-1b-flash encoder, ~1B params, frozen) + Qwen3-1.7B LLM (frozen) + modality adapter + LoRA
 - Framework: NeMo 2.8.0rc0 + Lightning + Lhotse data pipeline
 - Data: Lhotse CutSet JSONL derived from ATCOSIM Kaldi format (audio resampled 32kHz→16kHz)
