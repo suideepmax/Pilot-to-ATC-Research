@@ -4,7 +4,7 @@ Usage: CUDA_VISIBLE_DEVICES=0 python eval_finetuned.py \
     --checkpoint ~/canary-ft/experiments/checkpoints/step=10000-last.ckpt \
     --test-manifest ~/canary-ft/data/test_manifest.json
 """
-import argparse, hashlib, json, os, torch
+import argparse, hashlib, json, os, traceback, torch
 from torch.distributed.checkpoint.format_utils import dcp_to_torch_save
 from jiwer import wer
 
@@ -87,7 +87,17 @@ def main():
         print(f'  missing (first 10): {load_result.missing_keys[:10]}')
     if n_unexpected:
         print(f'  unexpected (first 10): {load_result.unexpected_keys[:10]}')
-    assert n_missing + n_unexpected <= 5, (
+    # --base composed reconstructs the exact architecture the checkpoint was
+    # trained under (same config, no LoRA wrapping) -- a healthy load has NO
+    # excuse for any key mismatch, so require exactly 0 rather than a
+    # tolerance. --base released keeps the small existing tolerance since
+    # that path loads a checkpoint's weights onto an independently-constructed
+    # LoRA-wrapped base which can have a handful of harmless buffer-naming
+    # differences (audited 2026-09-10: unjustified as a blanket "<=5" magic
+    # number, tightened for the path where 0 is actually the correct
+    # expectation).
+    max_allowed_mismatch = 0 if args.base == 'composed' else 5
+    assert n_missing + n_unexpected <= max_allowed_mismatch, (
         f'ISS-013: {n_missing} missing + {n_unexpected} unexpected keys when loading '
         f'{args.checkpoint} onto {base_desc} -- this looks like a structural '
         f'mismatch (e.g. LoRA-shaped base model vs a plain full-parameter checkpoint), not '
@@ -100,6 +110,33 @@ def main():
     if args.max_samples > 0: samples = samples[:args.max_samples]
     print(f'Evaluating {len(samples)} samples...')
 
+    # Determinism fix (2026-09-10, ISS-013 follow-up): NOT passing a
+    # generation_config here does NOT mean greedy decoding. transformers
+    # backfills every DEFAULT-valued field of the config actually used from
+    # the underlying LLM's own generation_config.json for any field this call
+    # leaves untouched. Verified directly (audit): for --base released this
+    # is harmless (canary-qwen-2.5b's LLM has pretrained_weights: false, so
+    # its GenerationConfig is built via from_model_config and never reads a
+    # generation_config.json -- do_sample stays False, matching every
+    # historical "greedy" WER reported for v1/v2/v3). For --base composed,
+    # the LLM is loaded via from_pretrained (pretrained_weights: true), which
+    # DOES read Qwen3-1.7B's own generation_config.json
+    # (do_sample=True, temperature=0.6, top_k=20, top_p=0.95) and backfills
+    # all four for --base composed.
+    #
+    # First fix attempt passed generation_config=GenerationConfig(do_sample=False)
+    # -- this does NOT work and was caught by a determinism check (running
+    # the same 10 samples twice gave 38.10% then 36.19% WER). Root cause:
+    # transformers' backfill checks whether a field's value EQUALS
+    # GenerationConfig()'s own class-level default to decide whether to
+    # override it from the model's generation_config.json -- and False IS
+    # that class default for do_sample, so an explicit `do_sample=False` is
+    # indistinguishable from "left unset" and gets overridden anyway.
+    # Passing do_sample as a direct **kwarg to .generate() (not nested in a
+    # GenerationConfig object) applies after that merge step and reliably
+    # wins -- retested with a second determinism check (below, must match).
+    gen_kwargs = dict(do_sample=False, num_beams=1, temperature=None, top_k=None, top_p=None)
+
     refs, hyps, errors = [], [], 0
     for i, s in enumerate(samples):
         if (i+1) % 500 == 0:
@@ -107,10 +144,20 @@ def main():
         try:
             ids = model.generate(prompts=[[{'role':'user',
                 'content':f'Transcribe the following: {model.audio_locator_tag}',
-                'audio':[s['audio_filepath']]}]], max_new_tokens=128)
+                'audio':[s['audio_filepath']]}]], max_new_tokens=128,
+                **gen_kwargs)
             refs.append(s['text'].lower().strip())
             hyps.append(model.tokenizer.ids_to_text(ids[0].cpu()).lower().strip())
-        except: errors += 1
+        except Exception as e:
+            # Audited 2026-09-10: a bare `except: errors += 1` silently
+            # swallows every failure mode (OOM, audio-load fault, CUDA
+            # error) with no visibility -- on a small sample count a
+            # handful of hidden failures can invert a comparison. Print the
+            # actual exception so a run with unexpectedly many errors can be
+            # diagnosed instead of just counted.
+            errors += 1
+            print(f'  [error] sample {i} ({s.get("audio_filepath", "?")}): {type(e).__name__}: {e}')
+            traceback.print_exc()
 
     final_wer = wer(refs, hyps)
     print(f'\nWER: {final_wer*100:.2f}% ({len(refs)} samples, {errors} errors)')

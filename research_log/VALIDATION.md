@@ -475,4 +475,81 @@ Result: **PASS**. This is the strongest evidence yet that the ISS-011/ISS-012 fi
 
 Remaining Risks: The run plateaued at 0.754 rather than continuing toward v1's ~0.68 -- open question whether this reflects (a) a genuine local optimum for this LR/schedule at full-decoder scope, (b) the early-stopping patience (3) being too aggressive for a full-decoder run's flatter improvement curve compared to LoRA's, or (c) something that would resolve with a longer warmup/different LR schedule at the full 10000-step scale. Before launching the full production run, consider whether `patience` should be raised (e.g. to 5-10) given how slowly the curve was still improving near the plateau (0.781->0.767->0.764->0.754 over the last 4 checkpoints -- small but nonzero, arguably not yet a true plateau). This is a scope/methodology decision, not a correctness bug.
 
+**METHODOLOGY DISCLOSURE (2026-09-10, added late -- independent systems-architect audit caught this record was missing what [[VAL-015]]/[[VAL-016]] already have):** `validation_ds` for this run pointed at `test_cuts.jsonl.gz`, the same file intended for final WER reporting -- early-stopping and the recorded best-score value here were computed against what should be a held-out test set, not a proper dev split. This run also trained on the OLD `train_cuts.jsonl.gz`, which included 9 cuts from one session (`uwb-atcc_ACCU-pwnH5N`) later found to also appear in `test_cuts.jsonl.gz` (fixed going forward via `make_dev_split.py`). Disclosed, not erased -- this is the run that produced `step=843-last.ckpt`, the checkpoint being considered for further evaluation/diagnosis, so this disclosure matters more here than for VAL-015/016, not less.
+
+**COMPARABILITY CAVEAT (2026-09-10):** the "already better than v1's ~0.68" framing above is not an apples-to-apples comparison and should not be read as one. v1 trained under plain `torch.optim.AdamW` in fp16 (per [[ISS-011]], numerically degenerate -- `exp_avg_sq` underflows to zero, `weight_decay` inert, update degenerates toward sign-SGD) with LoRA adapters (27.8M trainable params). This run trained under `MasterWeightAdamW` (fp32 master weights, real AdamW math) with the full decoder trainable (~1.4B params). Different optimizer, different parameter count, different effective loss landscape -- the two val_loss numbers are not measuring the same optimization problem, and closeness between them is not evidence of anything about adaptation scope.
+
 Related Records: [[ISS-011]], [[ISS-012]], [[VAL-015]], [[VAL-016]]
+
+## VAL-018 — S3-B3 (`step=843-last.ckpt`) preliminary eval-path smoke: 52.94% WER on 5 samples -- NOT a result, recorded for completeness only
+
+Date: 2026-09-10
+Status: INCONCLUSIVE -- recorded to prevent loss, not to be cited as a finding
+
+Objective: The initial run of `eval_finetuned.py --base composed` against Gate 3's checkpoint, done purely to confirm the eval-path fix (ISS-013) loads without error (0 missing/0 unexpected keys, confirmed) -- NOT intended as a WER measurement. Flagged by independent audit as an undocumented number sitting in scratchpad that should either be disclosed with correct caveats or not exist at all; recording it here with those caveats rather than deleting it.
+
+Inputs / Configuration: `--max-samples 5`, `--base composed`, `--exp-config experiments_s3b3_gate3/exp_config.yaml`, checkpoint `step=843-last.ckpt`. Decoding was NOT forced greedy -- at the time this ran, the composed base path backfills Qwen3-1.7B's own `generation_config.json` (`do_sample=True, temperature=0.6, top_k=20, top_p=0.95`), confirmed by independent audit of the actual `transformers` code path. The run's own log was not preserved, so the exact sampling seed/behavior for this specific run cannot be reconstructed.
+
+Actual Result: `{"wer": 0.5294117647058824, "samples": 5, "errors": 0}` (`scratchpad/eval_smoke_step843.json`).
+
+Result: **INCONCLUSIVE, not a measurement.** n=5 with non-deterministic sampled decoding cannot support any claim about model quality in either direction. It is not evidence that S3-B3 works, and not evidence that it doesn't.
+
+Limitations: No log preserved; decoding non-deterministic; sample size far too small for any variance estimate; text normalization not confirmed matched to v1/v3's reporting protocol.
+
+Next Action: superseded by a planned deterministic (forced `do_sample=False`), larger-sample-size re-run (see [[ISS-013]] eval-path items) before any S3-B3 WER is reported or compared against v1/v3.
+
+Related Records: [[ISS-013]], [[VAL-017]]
+
+## VAL-019 — S3-B3 (`step=843-last.ckpt`) first real, deterministic WER: 39.92% (500 samples, greedy) — WORSE than v1/v3 LoRA at this training point
+
+Date: 2026-09-10
+Status: COMPLETE, real result (supersedes [[VAL-018]]'s inconclusive 5-sample sampled number)
+
+Objective: Obtain the first trustworthy WER for the full-decoder-FT condition (S3-B3), fixing the decoding non-determinism found by independent audit before any number could be considered comparable to v1/v3's greedy-decoded results.
+
+Fixes applied first: `eval_finetuned.py` now passes `do_sample=False, num_beams=1` as direct keyword arguments to `model.generate()` (not nested inside a `GenerationConfig` object -- a first attempt using the object form was empirically shown NOT to work: two identical runs gave 38.10% then 36.19% WER, proving `transformers`' backfill-from-model-defaults mechanism cannot distinguish an explicit `do_sample=False` from a default `False`, since they're the same value; passing it as a direct `**kwarg` bypasses that ambiguity and was verified deterministic across 2 repeat runs, byte-identical output).
+
+Inputs / Configuration: `--base composed`, `--exp-config experiments_s3b3_gate3/exp_config.yaml`, `--checkpoint step=843-last.ckpt`, `--max-samples 500` (matches this project's own precedent 500-sample eval-subset convention, e.g. [[VAL-003]]), `test_manifest.json` (the real held-out test set, untouched by any split correction).
+
+Procedure: Ran twice at n=10 to confirm determinism (identical WER both times) before committing to the 500-sample run.
+
+Actual Result: `{"wer": 0.39918450560652396, "samples": 500, "errors": 0}` -- **39.92% WER**, 0 generation errors.
+
+Comparison (not a controlled comparison -- see caveats): v1 (LoRA q/v, plain fp16 AdamW, 10000 steps) = 23.32%; v3 (LoRA + regularization, same) = 20.70%. S3-B3 (full-decoder, `MasterWeightAdamW`, early-stopped at 843/10000 steps = 8.4% of budget) = 39.92%. S3-B3 is currently substantially WORSE than both LoRA conditions.
+
+Caveats (do not over-read this number without these):
+- S3-B3 stopped at 8.4% of its configured step budget (early stopping on val_loss plateau, [[VAL-017]]) -- this is not a converged result, and no comparably-early-stopped v1/v3 checkpoint exists to compare against.
+- Different optimizer (plain fp16 AdamW for v1/v3, numerically degenerate per [[ISS-011]], vs. fp32 `MasterWeightAdamW` for S3-B3) -- confounds any "adaptation scope" interpretation, per [[ISS-013]]/[[ISS-014]] audit notes.
+- Random bridge AND mismatched (unadapted) frozen encoder vs. the released model, per [[ISS-013]]'s extended finding -- a materially different speech front-end than what any released-model comparison would use.
+- Text normalization not yet confirmed identical to v1/v3's reporting protocol (both lowercase+strip here; v1/v3's exact historical normalization not re-verified in this pass).
+- Evaluated on the OLD `test_manifest.json`/`test_cuts.jsonl.gz` (same file used for all of v1/v2/v3's historical numbers) -- this IS the correct comparison set (untouched by the dev-split fix), not a leakage concern for this specific number.
+
+Related diagnostic (same session): [[VAL-020]] (audio-grounding check) confirms this number is not an artifact of the model ignoring its audio input.
+
+Result: **A real, reportable number, but not yet a fair "adaptation scope" comparison point.** It answers "does the current S3-B3 checkpoint, as-is, beat the LoRA baselines" (no), not "does full-decoder adaptation scope help ATC ASR" (still open, confounded by the differences listed above).
+
+Related Records: [[ISS-011]], [[ISS-013]], [[ISS-014]], [[VAL-017]], [[VAL-018]], [[VAL-020]]
+
+## VAL-020 — Teacher-forced audio-grounding check on S3-B3: model IS acoustically grounded, not just language-modeling plausible ATC phrasing
+
+Date: 2026-09-10
+Status: COMPLETE, PASS
+
+Objective: Determine whether S3-B3's decreasing training/val loss reflects genuine acoustic grounding or could instead be explained by the model learning ATC-domain language modeling (plausible phrasing) independent of the actual audio content -- raised as a live concern before trusting any WER number from this checkpoint. Per independent audit: a teacher-forced audio-permutation test is cheaper and more decisive than a generation-based audio-mismatch test (no sampling noise, no confound from mismatched-audio changing prompt length).
+
+Inputs / Configuration: New script `models/canary-qwen/scripts/audio_grounding_check.py`. Reuses the project's own `DataModule`/`SALMDataset` pipeline (not a hand-rolled substitute) against `step=843-last.ckpt`'s own `exp_config.yaml` validation_ds (`uwb_atcc_test`, the same set VAL-017 validated against). 6 batches of batch_size=4 (limited by 11GB VRAM for concurrent conformer-encoder attention over multiple audio streams; batch_size=16 OOM'd).
+
+Procedure: For each batch, compute the model's own training-time cross-entropy loss and next-token accuracy with (a) the batch's real audio-to-transcript pairing, and (b) the audio tensor permuted within the batch via a derangement (no fixed points; text/loss_mask untouched). Inference-only, `torch.no_grad()`, no generation, no sampling, fully deterministic.
+
+Actual Result (mean over 6 batches, 54-87 target tokens each):
+- Correct-audio: loss=0.6277, token accuracy=0.8689
+- Permuted-audio: loss=3.1911, token accuracy=0.4698
+- Delta: loss +2.56 (≈5x worse), accuracy -0.40 (≈46% relative drop)
+
+Consistent in direction and magnitude across all 6 batches individually (loss increase ranged +2.34 to +2.79; accuracy drop ranged -0.33 to -0.48) -- not a fluke of one batch.
+
+Result: **PASS.** The model's loss and token-accuracy are strongly and consistently sensitive to which audio it receives. This is not proof of correct word-level acoustic grounding (e.g. it doesn't test whether specific callsigns/numbers are grounded vs. approximately-right phrasing), but it does rule out the concrete concern that the model's low training loss is audio-independent language modeling. VAL-019's 39.92% WER should be read as a real (if currently mediocre) ASR result, not a symptom of a broken or audio-blind pipeline.
+
+Limitations: Ran against `uwb_atcc_test` (the leaked-into-validation set per [[VAL-017]]'s disclosure) since that's what the checkpoint's own frozen `exp_config.yaml` points at -- appropriate here since this diagnostic makes no model-selection decision, only probes an existing checkpoint's behavior. Did not test word-level substitution of specific critical content (callsigns/numbers) -- that remains a distinct, not-yet-done analysis (see decision memo's Candidate C).
+
+Related Records: [[VAL-017]], [[VAL-019]], [[ISS-013]]
