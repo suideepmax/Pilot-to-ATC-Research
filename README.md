@@ -36,7 +36,7 @@ See: `models/w2v2/docs/PROGRESS_ATCOSIM.md`
 - See: `models/w2v2/`
 
 ### 2. Canary-Qwen-2.5B (Hybrid, SALM)
-- nvidia/canary-qwen-2.5b (2.87B params, 27.8M trainable via LoRA)
+- nvidia/canary-qwen-2.5b architecture (2.87B params, 27.8M trainable via LoRA) — composed from Qwen/Qwen3-1.7B + nvidia/canary-1b-flash with a freshly-initialized modality bridge, not loaded from the released checkpoint (see `research_log/ISSUES.md` ISS-013)
 - NVIDIA NeMo (speechlm2), LoRA fine-tuning
 - HuggingFace: [suideepmax/canary-qwen-2.5b-atc-lora](https://huggingface.co/suideepmax/canary-qwen-2.5b-atc-lora)
 - See: `models/canary-qwen/`

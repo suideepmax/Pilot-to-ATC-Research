@@ -1,11 +1,12 @@
 # Canary-Qwen-2.5B Setup Guide
 
 ## Model Overview
-- **Model**: nvidia/canary-qwen-2.5b (2.5B parameters)
+- **Model**: nvidia/canary-qwen-2.5b architecture (2.5B parameters)
 - **Architecture**: SALM (Speech-Augmented Language Model)
   - Encoder: FastConformer (from nvidia/canary-1b-flash)
   - LLM: Qwen3-1.7B
   - Projection: Linear adapter + LoRA
+- **Provenance note**: training runs in this project compose the model fresh from `Qwen/Qwen3-1.7B` + `nvidia/canary-1b-flash`, with a randomly-initialized modality bridge — the released `nvidia/canary-qwen-2.5b` checkpoint's own trained bridge weights are never loaded (see `research_log/ISSUES.md` ISS-013)
 - **Framework**: NVIDIA NeMo 2.8.0+ (trunk install required)
 - **License**: CC-BY-4.0
 

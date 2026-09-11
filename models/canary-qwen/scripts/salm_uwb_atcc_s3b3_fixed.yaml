@@ -53,6 +53,22 @@ model:
   prompt_format: qwen
   audio_locator_tag: "<|audioplaceholder|>"
 
+  # Hydra-overridable mirror of salm_train_stable.py's GRADIENT_CLIP_VAL
+  # module constant (2026-09-10). Default here matches the constant exactly
+  # (1000.0) so leaving this unset changes nothing. Measured: clip_coef was
+  # exactly 1 (never engaged) on every single step of both Gate 2 (497 steps)
+  # and Gate 3 (842 steps) at this threshold -- a genuinely observed fact,
+  # not proof that 1000 (or any lower candidate value) is correct. Per
+  # external review: clipping cannot repair an already-nonfinite gradient or
+  # an optimizer-state numerical failure, and being inactive on all OBSERVED
+  # steps is not evidence about un-observed future gradient norms. A lower
+  # value (e.g. 100, informed by Gate 2/3 grad_norm_unscaled percentiles) is
+  # a candidate to be tested (does it measurably engage, does it change the
+  # loss trajectory) via CLI override
+  # (model.gradient_clip_val_unscaled=100.0), not to be silently substituted
+  # here as an established repair.
+  gradient_clip_val_unscaled: 1000.0
+
   perception:
     target: nemo.collections.speechlm2.modules.perception.AudioPerceptionModule
     output_dim: 2048
@@ -111,7 +127,14 @@ data:
     token_equivalent_duration: 0.08
     input_cfg:
       - type: lhotse_as_conversation
-        cuts_path: /home/kotasthane/canary-ft/data/train_cuts.jsonl.gz
+        # Changed from train_cuts.jsonl.gz (2026-09-10, GPT-6 Astra review +
+        # user-directed fix): the original file included 178 sessions (0.85h)
+        # now carved out as a proper held-out dev split (see
+        # make_dev_split.py) AND one session (uwb-atcc_ACCU-pwnH5N) that was
+        # also present in test_cuts.jsonl.gz -- an existing train/test leak,
+        # fixed as a byproduct. Verified zero session-level overlap among
+        # train_cuts_v2/dev_cuts/test_cuts directly (not inferred).
+        cuts_path: /home/kotasthane/canary-ft/data/train_cuts_v2.jsonl.gz
         audio_locator_tag: ${model.audio_locator_tag}
         tags:
           context: "Transcribe the following:"
@@ -125,10 +148,18 @@ data:
     prompt_format: ${model.prompt_format}
     token_equivalent_duration: 0.08
     datasets:
-      uwb_atcc_test:
+      uwb_atcc_dev:
         input_cfg:
           - type: lhotse_as_conversation
-            cuts_path: /home/kotasthane/canary-ft/data/test_cuts.jsonl.gz
+            # Changed from test_cuts.jsonl.gz (2026-09-10): validation_ds
+            # drives early stopping AND checkpoint selection, both of which
+            # are model-selection decisions -- using the final test set for
+            # those is data leakage into the reported metric, even though no
+            # gradient ever touches it. Gate 2/3/the bridge-LR ablation
+            # already ran against test_cuts.jsonl.gz before this fix; that
+            # limitation is disclosed in research_log/VALIDATION.md, not
+            # silently erased. test_cuts.jsonl.gz itself is untouched.
+            cuts_path: /home/kotasthane/canary-ft/data/dev_cuts.jsonl.gz
             audio_locator_tag: ${model.audio_locator_tag}
             tags:
               context: "Transcribe the following:"
@@ -183,7 +214,22 @@ exp_manager:
     filename: "{step}"
     monitor: val_loss
     mode: min
-    every_n_train_steps: 500
+    # every_n_train_steps=500 (was) gated Lightning's ModelCheckpoint via
+    # on_train_batch_end's `trainer.global_step % every_n_train_steps == 0`
+    # -- a check entirely independent of when validation actually ran.
+    # Verified directly (2026-09-10, GPT-6 Astra review): Gate 3's true best
+    # val_loss (0.754) occurred at step 750, which is NOT a multiple of 500,
+    # so it was never even considered for a top-k save; only step=500 (worse)
+    # and step=843-last (post-plateau) exist on disk, and the actual best
+    # checkpoint cannot be recovered.
+    # Fix: leave both every_n_train_steps and every_n_epochs null/None.
+    # Lightning's ModelCheckpoint.__init_triggers then defaults to
+    # every_n_epochs=1, every_n_train_steps=0 -- which makes on_validation_end
+    # (not on_train_batch_end) the sole top-k-save trigger, firing after
+    # EVERY validation call regardless of step-count alignment. Confirmed via
+    # direct read of lightning/pytorch/callbacks/model_checkpoint.py
+    # (on_validation_end / on_train_batch_end / __init_triggers), not assumed.
+    every_n_train_steps: null
     every_n_epochs: null
     save_top_k: 3
     always_save_nemo: false

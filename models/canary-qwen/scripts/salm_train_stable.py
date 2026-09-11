@@ -41,14 +41,18 @@ Usage: identical to salm_train.py, but pass a config using
 master_weight_adamw.MasterWeightAdamW as the optimizer _target_.
 """
 
+import json
 import os
 import re
+import time
 
 import hydra
 import torch
 from lightning.pytorch import Trainer
 from omegaconf import OmegaConf
 from torch.distributed.tensor import DTensor
+
+from lightning.pytorch.callbacks import ModelCheckpoint
 
 from nemo.collections.speechlm2 import SALM, DataModule, SALMDataset
 from nemo.collections.speechlm2.parts.optim_setup import freeze_and_subset
@@ -148,16 +152,27 @@ class StableSALM(SALM):
                 f"{BRIDGE_PARAM_PATTERN!r} -- the bridge-layer LR split is inactive this run "
                 f"(all trainable params will use model.cfg.optimizer.lr)."
             )
+        # Hydra-overridable (model.optimizer.bridge_lr) so the bridge-LR-split
+        # hypothesis (ISS-011 follow-up #3 / ISS-012) can be ablated via CLI
+        # override (e.g. model.optimizer.bridge_lr=1e-5, matching the base LR,
+        # to test whether the split matters at all) without a code change.
+        # Falls back to the BRIDGE_LR module constant if not set in config.
+        bridge_lr = self.cfg.optimizer.get("bridge_lr", BRIDGE_LR)
         logging.info(
-            f"configure_optimizers: {len(bridge_params)} bridge params @ lr={BRIDGE_LR}, "
+            f"configure_optimizers: {len(bridge_params)} bridge params @ lr={bridge_lr}, "
             f"{len(rest_params)} other trainable params @ lr={self.cfg.optimizer.lr} (default)."
         )
 
+        # hydra.utils.instantiate below passes self.cfg.optimizer's fields as
+        # kwargs to MasterWeightAdamW.__init__, which has no `bridge_lr`
+        # parameter -- must exclude it from the instantiated kwargs while
+        # still being able to read it above via .get().
+        optimizer_cfg = {k: v for k, v in self.cfg.optimizer.items() if k != "bridge_lr"}
         optim_groups = [
-            {"params": bridge_params, "lr": BRIDGE_LR},
+            {"params": bridge_params, "lr": bridge_lr},
             {"params": rest_params},
         ]
-        optimizer = hydra.utils.instantiate(self.cfg.optimizer, optim_groups, _convert_="all")
+        optimizer = hydra.utils.instantiate(optimizer_cfg, optim_groups, _convert_="all")
         ans = {"optimizer": optimizer}
         if "lr_scheduler" in self.cfg:
             lr_scheduler = hydra.utils.instantiate(self.cfg.lr_scheduler, optimizer)
@@ -274,7 +289,18 @@ class StableSALM(SALM):
             # then having the optimizer divide by loss_scale_used, in one fp32 op:
             # optimizer.step() will do grad.float() / grad_divisor, where
             # grad_divisor = loss_scale_used / clip_coef.
-            clip_coef = min(1.0, GRADIENT_CLIP_VAL / (grad_norm_unscaled + 1e-12))
+            #
+            # gradient_clip_val_unscaled is now Hydra-overridable
+            # (model.gradient_clip_val_unscaled) so a lowered threshold can be
+            # tested (e.g. via percentile analysis of observed grad_norm_unscaled
+            # in Gate 2/3 logs) without a code change and WITHOUT silently
+            # changing behavior for any run that doesn't pass the override --
+            # the module constant remains the default. A threshold change is a
+            # candidate to be validated (does it actually reduce the observed
+            # post-clip norm, does it change the loss trajectory), not an
+            # established repair -- see research_log/DECISIONS.md.
+            clip_val = self.cfg.get("gradient_clip_val_unscaled", GRADIENT_CLIP_VAL)
+            clip_coef = min(1.0, clip_val / (grad_norm_unscaled + 1e-12))
             optimizer.grad_divisor = loss_scale_used / clip_coef
 
             # ISS-012 correctness tripwire: after the first real (non-skipped)
@@ -295,7 +321,8 @@ class StableSALM(SALM):
             logging.info(
                 f"on_before_optimizer_step: grad_norm_unscaled={grad_norm_unscaled:.6g} "
                 f"loss_scale_used={loss_scale_used:.1f} loss_scale_next={optimizer.loss_scale:.1f} "
-                f"clip_coef={clip_coef:.6g} skipped={any_nonfinite}"
+                f"clip_coef={clip_coef:.6g} clip_val={self.cfg.get('gradient_clip_val_unscaled', GRADIENT_CLIP_VAL):.1f} "
+                f"skipped={any_nonfinite}"
             )
 
     def on_before_zero_grad(self, optimizer):
@@ -330,6 +357,46 @@ class StableSALM(SALM):
             if torch.distributed.get_rank() == 0:
                 logging.info("ISS-012 tripwire: PASSED -- confirmed a real (nonzero) optimizer update occurred.")
 
+    def on_validation_epoch_end(self):
+        # GPT-6 Astra review (2026-09-10): Gate 3's early-stopping account was
+        # initially wrong because Lightning's EarlyStopping only PRINTS on an
+        # improving check ("Metric val_loss improved... New best score: X"),
+        # not on a non-improving one -- so monitoring "improved" log lines
+        # alone silently misses every non-improving check, and with
+        # trainer.logger: False nothing persists them anywhere else either.
+        # This writes EVERY validation check's result unconditionally, so the
+        # full stopping trajectory can be reconstructed after the fact
+        # instead of re-derived from an incomplete console-log audit.
+        super().on_validation_epoch_end()
+        if self.trainer.sanity_checking or torch.distributed.get_rank() != 0:
+            return
+        val_loss = self.trainer.callback_metrics.get("val_loss")
+        if val_loss is None:
+            return
+        val_loss = float(val_loss)
+        # Bug found via direct resume smoke test (2026-09-10): if val_loss is
+        # NaN, `val_loss < inf` evaluates to False (NaN compares False against
+        # everything), so is_new_best stays False and _best_val_loss_seen is
+        # never set on a fresh process -- then the unconditional access below
+        # used to crash with AttributeError instead of recording the NaN.
+        # Fixed: track best-so-far without ever assuming it was already set.
+        prev_best = getattr(self, "_best_val_loss_seen", float("inf"))
+        is_new_best = val_loss < prev_best
+        self._best_val_loss_seen = val_loss if is_new_best else prev_best
+        row = {
+            "wall_time": time.time(),
+            "global_step": int(self.trainer.global_step),
+            "epoch": int(self.trainer.current_epoch),
+            "val_loss": val_loss,
+            "best_val_loss_so_far": float(self._best_val_loss_seen),
+            "is_new_best": is_new_best,
+            "lrs": [g["lr"] for g in self.optimizers().param_groups] if self.trainer.optimizers else None,
+        }
+        log_path = getattr(self, "_metrics_log_path", "val_metrics.jsonl")
+        with open(log_path, "a") as f:
+            f.write(json.dumps(row) + "\n")
+        logging.info(f"on_validation_epoch_end: {row}")
+
 
 @hydra_runner(config_path="conf", config_name="salm")
 def train(cfg):
@@ -340,8 +407,33 @@ def train(cfg):
     log_dir = exp_manager(trainer, cfg.get("exp_manager", None))
     OmegaConf.save(cfg, log_dir / "exp_config.yaml")
 
+    # Recovery checkpointing: exp_manager's own ModelCheckpoint (configured via
+    # checkpoint_callback_params) is now purely a BEST-loss-monitored callback
+    # (see salm_uwb_atcc_s3b3_fixed.yaml's every_n_train_steps/every_n_epochs
+    # comment) -- it only saves on a genuine val_loss improvement, at whatever
+    # step that occurs. That alone is not a substitute for periodic full-state
+    # recovery: if training crashes between two improving checks (plausible
+    # over a multi-hour run), there would be no recent checkpoint to resume
+    # from at all. This second, UNMONITORED callback saves full trainer state
+    # (weights + optimizer + scheduler + custom loss-scale/grad_divisor state,
+    # since those live on the optimizer object which Lightning checkpoints
+    # whole) every val_check_interval steps regardless of val_loss, keeping
+    # only the single most recent one (save_top_k=1, monitor=None -> "most
+    # recently saved" ordering) to bound disk usage.
+    recovery_interval = int(cfg.trainer.get("val_check_interval", 250))
+    recovery_ckpt = ModelCheckpoint(
+        dirpath=str(log_dir / "recovery_checkpoints"),
+        filename="{step}-recovery",
+        monitor=None,
+        every_n_train_steps=recovery_interval,
+        save_top_k=1,
+        save_last=False,
+    )
+    trainer.callbacks.append(recovery_ckpt)
+
     with trainer.init_module():
         model = StableSALM(OmegaConf.to_container(cfg.model, resolve=True))
+    model._metrics_log_path = str(log_dir / "val_metrics.jsonl")
 
     dataset = SALMDataset(tokenizer=model.tokenizer)
     datamodule = DataModule(cfg.data, tokenizer=model.tokenizer, dataset=dataset)

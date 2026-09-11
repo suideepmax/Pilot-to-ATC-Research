@@ -14,7 +14,24 @@ def main():
     p.add_argument('--test-manifest', required=True)
     p.add_argument('--output', default='eval_results.json')
     p.add_argument('--max-samples', type=int, default=0)
+    # ISS-013 fix (2026-09-10): 'released' (default) preserves the original
+    # behavior for v1/v2/v3 -- those are LoRA adapters trained ON TOP OF the
+    # released nvidia/canary-qwen-2.5b checkpoint, so that IS the correct base.
+    # S3-B3 (and any other full-decoder-FT run under salm_train_stable.py) was
+    # never composed from the released checkpoint at all (random bridge init,
+    # see ISS-013) -- loading its plain llm.model.layers.* keys onto the
+    # released model's LoRA-shaped llm.base_model.model.model.layers.* keys
+    # necessarily mismatches every LLM weight. 'composed' instead rebuilds the
+    # exact architecture salm_train_stable.py trained (same _target_/
+    # pretrained_llm/pretrained_asr as the run's own saved exp_config.yaml),
+    # so the checkpoint's own key names match structurally.
+    p.add_argument('--base', choices=['released', 'composed'], default='released')
+    p.add_argument('--exp-config', default=None,
+                    help="Path to the run's exp_config.yaml (written by salm_train_stable.py "
+                         "next to its checkpoints). Required when --base composed.")
     args = p.parse_args()
+    if args.base == 'composed' and not args.exp_config:
+        p.error('--exp-config is required when --base composed')
 
     # Cache path is derived from the checkpoint path (not a fixed global path) so
     # that concurrent evaluations of different checkpoints never collide and
@@ -36,17 +53,33 @@ def main():
     assert nans == 0, 'NaN weights detected — check AdamW eps setting'
 
     from nemo.collections.speechlm2.models import SALM
-    print('Loading model...')
-    model = SALM.from_pretrained('nvidia/canary-qwen-2.5b')
+    print(f'Loading model (base={args.base})...')
+    if args.base == 'released':
+        model = SALM.from_pretrained('nvidia/canary-qwen-2.5b')
+        base_desc = 'nvidia/canary-qwen-2.5b (released)'
+    else:
+        from omegaconf import OmegaConf
+        exp_cfg = OmegaConf.load(args.exp_config)
+        model = SALM(OmegaConf.to_container(exp_cfg.model, resolve=True))
+        # Composed construction defaults to fp32 (no from_pretrained-style
+        # dtype pass-through); the checkpoint's own tensors are fp16
+        # (trained under precision: 16-true -- verified directly via
+        # torch.load dtype inspection), and fp32 for this ~2.7B-param model
+        # OOMs an 11GB 2080 Ti on its own weights alone. Cast to match.
+        model = model.half()
+        base_desc = (f"composed from {args.exp_config} "
+                     f"(pretrained_llm={exp_cfg.model.pretrained_llm}, "
+                     f"pretrained_asr={exp_cfg.model.pretrained_asr})")
+
     # ISS-013 (2026-09-10): strict=False was previously silently discarding
-    # missing/unexpected keys. The base model here is the RELEASED
-    # canary-qwen-2.5b (LoRA-shaped LLM keys, e.g.
-    # llm.base_model.model.model.layers.*), but a non-LoRA full-decoder-FT
+    # missing/unexpected keys. --base released's LLM keys are LoRA-shaped
+    # (llm.base_model.model.model.layers.*); a non-LoRA full-decoder-FT
     # checkpoint (e.g. S3-B3) has plain llm.model.layers.* keys -- a
     # structural mismatch under which strict=False would let the ENTIRE LLM
-    # silently fail to load, and this script would then report the
-    # RELEASED model's WER as if it were the trained checkpoint's. Assert on
-    # the actual incompatibility lists instead of discarding them.
+    # silently fail to load, and this script would then report the BASE
+    # model's WER as if it were the trained checkpoint's. Assert on the
+    # actual incompatibility lists instead of discarding them, regardless of
+    # which --base was used.
     load_result = model.load_state_dict(state, strict=False)
     n_missing, n_unexpected = len(load_result.missing_keys), len(load_result.unexpected_keys)
     print(f'load_state_dict: {n_missing} missing keys, {n_unexpected} unexpected keys')
@@ -56,7 +89,7 @@ def main():
         print(f'  unexpected (first 10): {load_result.unexpected_keys[:10]}')
     assert n_missing + n_unexpected <= 5, (
         f'ISS-013: {n_missing} missing + {n_unexpected} unexpected keys when loading '
-        f'{args.checkpoint} onto nvidia/canary-qwen-2.5b -- this looks like a structural '
+        f'{args.checkpoint} onto {base_desc} -- this looks like a structural '
         f'mismatch (e.g. LoRA-shaped base model vs a plain full-parameter checkpoint), not '
         f'a handful of harmless buffer differences. Evaluating anyway would silently report '
         f"the BASE model's performance, not this checkpoint's. See research_log/ISSUES.md ISS-013."
