@@ -52,8 +52,6 @@ from lightning.pytorch import Trainer
 from omegaconf import OmegaConf
 from torch.distributed.tensor import DTensor
 
-from lightning.pytorch.callbacks import ModelCheckpoint
-
 from nemo.collections.speechlm2 import SALM, DataModule, SALMDataset
 from nemo.collections.speechlm2.parts.optim_setup import freeze_and_subset
 from nemo.core.config import hydra_runner
@@ -114,16 +112,32 @@ BRIDGE_PARAM_PATTERN = r"^perception\.proj\..+$"
 BRIDGE_LR = 5e-4
 
 # Dynamic loss-scale backoff/growth, same style as torch.amp.GradScaler
-# (backoff_factor=0.5, growth_factor=2.0) but with a much shorter
-# growth_interval (200 vs GradScaler's default 2000) so the scale can
-# actually calibrate within the short step counts used by this staged
-# validation protocol's smoke tests -- reconsider raising it back toward
-# 2000 once this trains at full (10000-step) scale.
+# (backoff_factor=0.5, growth_factor=2.0). GROWTH_INTERVAL=200 (short, so the
+# scale calibrates fast) was fine for Gate 1/2/3's short smoke/gate runs, but
+# is now raised for the full 10,000-step production run per direct evidence
+# from Gate 2+3's actual grad-norm history (systems-architect audit,
+# 2026-09-11, read from Gate 2/3's on_before_optimizer_step logs -- 1,339
+# real steps parsed): at GROWTH_INTERVAL=200, the scale would grow past
+# anything ever validated (grew cleanly through 512/1024/2048/4096, only 39
+# steps observed at 8192) and reach MAX_LOSS_SCALE=65536 by ~step 1400,
+# sitting there for ~86% of a 10,000-step run -- 8x above the highest scale
+# any run has actually exercised, while grad_norm_unscaled was *decreasing*
+# over the same window (p50 43.8 -> 6.57), i.e. the scale would be growing
+# precisely when there is no headroom pressure motivating it to. Capping
+# MAX_LOSS_SCALE at 8192 (the top of the validated envelope) and slowing
+# GROWTH_INTERVAL to 2000 (matching torch.amp.GradScaler's own default) keeps
+# the full run inside the same numerical regime Gate 2/3 already validated,
+# rather than extrapolating 8x past it untested.
 LOSS_SCALE_BACKOFF_FACTOR = 0.5
 LOSS_SCALE_GROWTH_FACTOR = 2.0
-LOSS_SCALE_GROWTH_INTERVAL = 200
-MIN_LOSS_SCALE = 1.0
-MAX_LOSS_SCALE = 65536.0
+LOSS_SCALE_GROWTH_INTERVAL = 2000
+# MIN_LOSS_SCALE raised 1.0 -> 128.0 (systems-architect audit, 2026-09-11):
+# Gate 2 validated a floor of 128 (its scale never needed to go lower); 1.0
+# silently permits far deeper backoff than anything tested, trading a visible
+# persistent-skip signal for a silent-underflow regime with no evidence it's
+# safe.
+MIN_LOSS_SCALE = 128.0
+MAX_LOSS_SCALE = 8192.0
 
 
 class StableSALM(SALM):
@@ -195,7 +209,27 @@ class StableSALM(SALM):
         # live scale off the optimizer (single source of truth) rather than
         # a local constant, since on_before_optimizer_step adjusts it every step.
         ans = dict(ans)
-        ans["loss"] = ans["loss"] * self.optimizers().loss_scale
+        loss_scale = self.optimizers().loss_scale
+        scaled_loss = ans["loss"] * loss_scale
+        # ml-engineer audit (2026-09-11): ans["loss"] is fp16 (computed from
+        # fp16 logits under precision: 16-true) -- confirmed directly from
+        # Gate 3's own logged values, all exactly fp16-representable. A
+        # python-float multiply keeps the tensor dtype, so `scaled_loss` is
+        # fp16 too, with max representable value 65504. At loss_scale=8192
+        # (this file's validated ceiling after this same audit), any
+        # unscaled loss > ~8.0 overflows THIS multiply directly -- a failure
+        # mode entirely different from, and upstream of, the gradient-based
+        # skip on_before_optimizer_step already detects, but which produces
+        # an outwardly identical "skipped=True" log line. Distinguish them
+        # explicitly so a run doesn't misread a loss-magnitude spike (e.g. one
+        # unusually hard batch) as the numerical-stability fix regressing.
+        if torch.distributed.get_rank() == 0 and not torch.isfinite(scaled_loss):
+            logging.warning(
+                f"training_step: SCALED LOSS overflowed fp16 (loss={train_loss.item():.6g} * "
+                f"loss_scale={loss_scale}) -- this step's skip (if any) is a loss-magnitude "
+                f"overflow, not gradient instability."
+            )
+        ans["loss"] = scaled_loss
         return ans
 
     # ISS-012: configure_gradient_clipping is intentionally NOT overridden.
@@ -274,7 +308,30 @@ class StableSALM(SALM):
             optimizer.loss_scale = max(optimizer.loss_scale * LOSS_SCALE_BACKOFF_FACTOR, MIN_LOSS_SCALE)
             optimizer._consecutive_clean_steps = 0
             optimizer.grad_divisor = optimizer.loss_scale
+
+            # Sustained-skip tripwire (systems-architect audit, 2026-09-11):
+            # _verified_first_real_update (on_before_zero_grad, below) only
+            # ever checks ONCE, at the first non-skipped step -- there is no
+            # ongoing guard against a run silently skipping every step for
+            # hours afterward (e.g. loss_scale stuck oscillating at
+            # MIN_LOSS_SCALE against a genuinely-diverged model) while the
+            # log keeps printing normally and nothing distinguishes that from
+            # healthy operation at a glance over a 65-hour unattended run.
+            # Raise once consecutive skips exceed a threshold well above any
+            # observed in Gate 1/2/3 (worst case there: a handful of isolated
+            # skips during the very first ~100 steps, never sustained).
+            optimizer._consecutive_skipped_steps = getattr(optimizer, "_consecutive_skipped_steps", 0) + 1
+            if optimizer._consecutive_skipped_steps > 50:
+                raise RuntimeError(
+                    f"Sustained-skip tripwire: {optimizer._consecutive_skipped_steps} consecutive "
+                    f"non-finite-gradient steps (loss_scale backed off to {optimizer.loss_scale}, "
+                    f"floor {MIN_LOSS_SCALE}). This is far beyond anything observed in Gate 1/2/3 "
+                    "(isolated skips only, never sustained) and indicates the model has likely "
+                    "diverged rather than hit a transient instability. Stopping rather than "
+                    "silently burning the remaining GPU-hours."
+                )
         else:
+            optimizer._consecutive_skipped_steps = 0
             optimizer._consecutive_clean_steps = getattr(optimizer, "_consecutive_clean_steps", 0) + 1
             if optimizer._consecutive_clean_steps >= LOSS_SCALE_GROWTH_INTERVAL:
                 optimizer.loss_scale = min(optimizer.loss_scale * LOSS_SCALE_GROWTH_FACTOR, MAX_LOSS_SCALE)
@@ -407,29 +464,23 @@ def train(cfg):
     log_dir = exp_manager(trainer, cfg.get("exp_manager", None))
     OmegaConf.save(cfg, log_dir / "exp_config.yaml")
 
-    # Recovery checkpointing: exp_manager's own ModelCheckpoint (configured via
-    # checkpoint_callback_params) is now purely a BEST-loss-monitored callback
-    # (see salm_uwb_atcc_s3b3_fixed.yaml's every_n_train_steps/every_n_epochs
-    # comment) -- it only saves on a genuine val_loss improvement, at whatever
-    # step that occurs. That alone is not a substitute for periodic full-state
-    # recovery: if training crashes between two improving checks (plausible
-    # over a multi-hour run), there would be no recent checkpoint to resume
-    # from at all. This second, UNMONITORED callback saves full trainer state
-    # (weights + optimizer + scheduler + custom loss-scale/grad_divisor state,
-    # since those live on the optimizer object which Lightning checkpoints
-    # whole) every val_check_interval steps regardless of val_loss, keeping
-    # only the single most recent one (save_top_k=1, monitor=None -> "most
-    # recently saved" ordering) to bound disk usage.
-    recovery_interval = int(cfg.trainer.get("val_check_interval", 250))
-    recovery_ckpt = ModelCheckpoint(
-        dirpath=str(log_dir / "recovery_checkpoints"),
-        filename="{step}-recovery",
-        monitor=None,
-        every_n_train_steps=recovery_interval,
-        save_top_k=1,
-        save_last=False,
-    )
-    trainer.callbacks.append(recovery_ckpt)
+    # REMOVED (ml-engineer audit, 2026-09-11): a separate "recovery"
+    # ModelCheckpoint used to live here, saving unmonitored full state every
+    # `val_check_interval` steps as insurance against crashing between two
+    # improving checks. It was redundant and had a latent unit bug. NeMo's
+    # own checkpoint callback already sets `save_last: True` by default, and
+    # Lightning's `ModelCheckpoint.on_validation_end` calls
+    # `_save_last_checkpoint` UNCONDITIONALLY (not gated by monitored
+    # improvement) -- so `checkpoints/step=N-last.ckpt` is already a
+    # full-state (weights + optimizer + scheduler) save written at EVERY
+    # validation call, confirmed directly against Gate 3's own log (saves at
+    # steps 31, 62, 93, 125, ...). The removed callback's own interval was
+    # additionally wrong by 8x: `val_check_interval` is counted in
+    # micro-batches, but `ModelCheckpoint.every_n_train_steps` is counted in
+    # optimizer steps, so it fired every ~2000 micro-batches (~87 minutes)
+    # while believing it matched validation cadence (~31 optimizer steps).
+    # Net effect of keeping it: +22GB disk and +22s I/O every 250 steps for
+    # zero additional recovery coverage over what `-last.ckpt` already gives.
 
     with trainer.init_module():
         model = StableSALM(OmegaConf.to_container(cfg.model, resolve=True))

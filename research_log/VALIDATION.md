@@ -563,3 +563,26 @@ Result: **Audio-dependence demonstrated in the teacher-forced path.** Weakens (d
 Limitations: Did not test word-level substitution of specific critical content (callsigns/numbers) -- that remains a distinct, not-yet-done analysis (see decision memo's Candidate C). Did not verify generation-path correctness (tokenizer config, EOS/truncation behavior, prompt template) independent of this teacher-forced measurement.
 
 Related Records: [[VAL-017]], [[VAL-019]], [[ISS-013]]
+
+## VAL-021 — `experiments_full_decoder`@step 3000 is NOT a valid same-optimizer comparison point: NaN/Inf-free weights, but behaviorally collapsed generation
+
+Date: 2026-09-11
+Status: COMPLETE, invalidates a planned comparison arm rather than confirming one
+
+Objective: Use `experiments_full_decoder`'s step=3000 checkpoint (full-decoder scope, v1's exact optimizer/hyperparameters, part of the earlier abandoned run that later diverged to `inf` around step 4000-5000) as a same-optimizer scope-comparison point against v1@3000, to isolate "does scope matter" from "does the optimizer fix matter."
+
+Actual Result: greedy WER = **836.92%** (500 samples, 0 generation errors). Inspected 5 actual generated hypotheses directly (not inferred from the WER number alone):
+```
+REF: dobry den csa five k p ruzyne tower continue approach
+HYP: dobry den csa five k p ruzyne tower contanfrance approachs concret s conntinue
+     approach v s conntinue approach v dohin a koner tower one three four three v p
+     k s conntinue approach v dohin a conntinue approach v dohin a conntinue approach
+     v dohin a conntinue approach v dohin a dohin a dohin a dohin ...
+```
+All 5 inspected samples show the same pattern: a roughly-plausible start followed by degenerate repetition loops (the same short phrase repeated many times until the token budget is exhausted). This is a genuine text-generation collapse, not a scoring artifact or eval-path bug.
+
+Result: **INVALIDATES this checkpoint as a comparison point, does not inform the scope question.** The step=3000 checkpoint passed a NaN/Inf tensor scan (0/1607 tensors, [[VAL-019]]'s prep work) but is already behaviorally collapsing -- consistent with this specific run being the one independently documented ([[ISS-011]]) to fully diverge to `inf` validation loss around step 4000-5000 under the same numerically degenerate fp16 AdamW optimizer. **Methodological correction for future checkpoint-health checks: a NaN/Inf tensor scan is necessary but not sufficient evidence a checkpoint is usable -- a model can be numerically finite everywhere in its weights while its generation behavior is already collapsing on the way to full divergence.** Treating "0 NaN/Inf" as "clean/safe to use" (done earlier this session for this exact checkpoint) was an overclaim.
+
+Next Action: if the same-optimizer scope comparison is still wanted, retry with an earlier, further-from-divergence checkpoint from this run (500/1000/1500/2000) and inspect actual generated text (not just WER or NaN/Inf) before treating any of them as valid, rather than assuming health from step-distance-to-divergence alone. Not yet done -- deprioritized behind the production-run-readiness work.
+
+Related Records: [[ISS-011]], [[VAL-019]], [[VAL-020]]

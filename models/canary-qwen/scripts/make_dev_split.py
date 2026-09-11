@@ -98,7 +98,18 @@ def main():
     dev_cuts = [c for s in dev_sessions for c in by_session[s]]
     new_train_cuts = [c for s in train_sessions for c in by_session[s]]
 
-    assert not (dev_sessions & train_sessions & test_sessions)
+    # Fixed (2026-09-11, ml-engineer audit): this was a TRIPLE intersection,
+    # which is always empty by construction (dev_sessions and train_sessions
+    # are already disjoint, having been split from the same pool a few lines
+    # up) -- it could never fire even in the case it looks like it's
+    # guarding (a session present in both dev and test). Real protection for
+    # THAT case is the `del by_session[s]` loop above, already verified
+    # correct via a separate direct pairwise check this session (train_v2
+    # 10,619 cuts / dev 915 / test 2,886, zero session overlap confirmed).
+    # These pairwise asserts are the actual guarantee, kept for future reruns.
+    assert not (dev_sessions & train_sessions)
+    assert not (dev_sessions & test_sessions)
+    assert not (train_sessions & test_sessions)
 
     out_dir = Path(args.out_dir)
     dev_path = out_dir / "dev_cuts.jsonl.gz"
