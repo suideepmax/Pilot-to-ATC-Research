@@ -484,6 +484,64 @@ def train(cfg):
 
     with trainer.init_module():
         model = StableSALM(OmegaConf.to_container(cfg.model, resolve=True))
+
+    # ISS-013 fix (2026-09-11): every prior run in this project (v1/v2/v3/
+    # S3-B3) composed its SALM fresh from pretrained_llm + pretrained_asr,
+    # giving a randomly-initialized modality bridge and canary-1b-flash's
+    # own (never further-adapted) encoder -- NOT the released
+    # nvidia/canary-qwen-2.5b's actual trained bridge/encoder. This is a
+    # documented, maintainer-acknowledged NeMo pitfall (NVIDIA's
+    # piotrzelasko, HF discussions/13, 2025-10-06: "If you wish to finetune
+    # you will need to set pretrained_weights: False and add 1 LOC to
+    # manually load canary-qwen pretrained weights"), not something specific
+    # to this project. Opt-in via model.load_released_pretrained (default
+    # False, so no prior run's behavior changes retroactively).
+    #
+    # The released LLM is LoRA-wrapped (llm.base_model.model.model.layers.*)
+    # while this project's full-decoder-FT scope needs a plain decoder
+    # (llm.model.layers.*) -- merge_and_unload() folds the LoRA delta into
+    # the base weights first. Verified directly (2026-09-11) that this
+    # produces EXACTLY the same 1607 state_dict keys as this project's
+    # composed architecture (0 keys differ either direction) -- structurally
+    # compatible, not merely close.
+    #
+    # Model construction above happens under FSDP2 (trainer.init_module()),
+    # so model's parameters are DTensors (per-rank local shards). A plain
+    # load_state_dict() with ordinary (non-distributed) tensors FAILS
+    # outright here -- verified directly: "aten.copy_.default: got mixed
+    # torch.Tensor and DTensor, need to convert all torch.Tensor to DTensor
+    # before calling distributed operators". Each tensor must be converted
+    # via distribute_tensor(...) to match the existing parameter's own
+    # device_mesh/placements first. Verified this only produces correct
+    # results when every rank's input tensor is identical (distribute_tensor
+    # shards whatever local value it's given -- it does NOT broadcast from
+    # rank 0), which holds here since every rank loads the same released
+    # checkpoint from the same (deterministic, non-random) files.
+    if cfg.model.get("load_released_pretrained", False):
+        from torch.distributed.tensor import DTensor, distribute_tensor
+
+        if torch.distributed.get_rank() == 0:
+            logging.info("load_released_pretrained=True: loading nvidia/canary-qwen-2.5b's "
+                         "actual trained weights (bridge + encoder + LoRA-merged decoder) "
+                         "on top of the fresh composition, per ISS-013's documented fix.")
+        ref = SALM.from_pretrained("nvidia/canary-qwen-2.5b")
+        ref.llm = ref.llm.merge_and_unload()
+        ref_state = ref.state_dict()
+        del ref
+
+        model_state = model.state_dict()
+        converted = {}
+        for k, v in ref_state.items():
+            existing = model_state[k]
+            if isinstance(existing, DTensor):
+                converted[k] = distribute_tensor(v.to(existing.device_mesh.device_type), existing.device_mesh, existing.placements)
+            else:
+                converted[k] = v
+        load_result = model.load_state_dict(converted, strict=True)
+        if torch.distributed.get_rank() == 0:
+            logging.info(f"load_released_pretrained: loaded {len(converted)} tensors, "
+                         f"missing={load_result.missing_keys}, unexpected={load_result.unexpected_keys}")
+
     model._metrics_log_path = str(log_dir / "val_metrics.jsonl")
 
     dataset = SALMDataset(tokenizer=model.tokenizer)

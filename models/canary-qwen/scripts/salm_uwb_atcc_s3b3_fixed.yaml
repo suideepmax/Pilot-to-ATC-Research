@@ -50,6 +50,31 @@ model:
   pretrained_asr: nvidia/canary-1b-flash
   pretrained_weights: True
 
+  # Opt-in fix for ISS-013 (2026-09-11). The code's own default
+  # (cfg.model.get("load_released_pretrained", False)) is False, so any
+  # OTHER config that never sets this key (v1/v2/v3's separate yaml files,
+  # or a stripped-down copy of this one) is completely unaffected -- nothing
+  # retroactively changes for already-completed runs either (they're just
+  # log files on disk). Set to True HERE, in this file specifically, because
+  # this is the corrected recipe going forward for the S3-B3 full-decoder
+  # track. When True, salm_train_stable.py loads
+  # nvidia/canary-qwen-2.5b's ACTUAL trained modality-bridge and encoder
+  # weights (plus its LoRA-merged decoder) on top of this fresh composition,
+  # right after construction and before training starts -- per NVIDIA
+  # maintainer piotrzelasko's documented guidance (HF discussions/13,
+  # 2025-10-06: "set pretrained_weights: False and add 1 LOC to manually
+  # load canary-qwen pretrained weights"). Without this, every condition in
+  # this project (v1/v2/v3 included) starts the bridge from a random
+  # initialization and uses canary-1b-flash's own (never further-adapted)
+  # encoder rather than the released model's actual trained one -- a
+  # documented pitfall, not a deliberate experimental choice. Verified
+  # directly (2026-09-11) before enabling: the released model's LoRA-merged
+  # state_dict has EXACTLY the same 1607 keys as this project's composed
+  # architecture (0 differ either direction), and the DTensor-conversion
+  # path this requires under FSDP2 was independently tested on a toy model
+  # before being trusted here.
+  load_released_pretrained: True
+
   freeze_params:
     - "^perception\\.preprocessor\\..+$"
     - "^perception\\.encoder\\..+$"

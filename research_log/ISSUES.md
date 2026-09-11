@@ -352,3 +352,14 @@ Mitigation: NOT yet investigated. Candidate directions (none yet verified): (a) 
 Resolution: OPEN -- explicitly out of scope for the current investigation per user instruction ("diagnosis and a regression-tested resume fix only" was scoped to the optimizer-state question); flagged here rather than fixed opportunistically. Do not resume any real checkpoint until this is separately resolved and a full two-cycle resume test passes.
 
 Related Records: [[ISS-014]]
+
+**UPDATE (2026-09-11) -- FIX IMPLEMENTED AND VERIFIED, not just identified.** Following direct user pushback that the documented NVIDIA-maintainer fix should be implemented rather than deferred, implemented `load_released_pretrained` (opt-in, `models/canary-qwen/scripts/salm_train_stable.py`, default False so no other config's behavior changes retroactively; set True in `salm_uwb_atcc_s3b3_fixed.yaml` specifically going forward).
+
+Implementation, verified step by step before trusting it (not assumed):
+1. `SALM.from_pretrained('nvidia/canary-qwen-2.5b')` loads the released model; `.llm.merge_and_unload()` folds its LoRA delta into the base Qwen3 weights (PEFT's standard merge). Verified directly: the merged state_dict has **exactly** the same 1607 keys as this project's composed full-decoder architecture -- 0 keys differ in either direction.
+2. Model construction happens under FSDP2 (`trainer.init_module()`), so parameters are `DTensor`s (per-rank local shards) by the time this loading code runs. A plain `load_state_dict()` with ordinary tensors was tested FIRST and confirmed to fail outright: `aten.copy_.default: got mixed torch.Tensor and DTensor, need to convert all torch.Tensor to DTensor before calling distributed operators`. The correct fix -- converting each tensor via `torch.distributed.tensor.distribute_tensor(v, existing.device_mesh, existing.placements)` before loading -- was verified on an isolated 2-GPU toy model first, including confirming it requires every rank to pass an identical source tensor (it shards whatever local value it's given; it does not broadcast from rank 0) -- true here since every rank loads the same deterministic checkpoint files.
+3. End-to-end smoke test (4 real GPUs, `experiments_s3b3_releasedweights_smoke/`, 10 steps): `load_state_dict` reported 1607 loaded, 0 missing, 0 unexpected. val_loss trajectory: 3.29 (step 2) -> 2.64 -> 2.21 -> 1.99 -> 1.94 (step 10) -- dramatically better cold-start than any prior random-bridge run (Gate 2/3's comparable early checks were in the 8-13 range), consistent with genuinely transferring real pretrained knowledge rather than starting from scratch. Clean exit, zero tracebacks, correct checkpoint policy.
+
+Status: RESOLVED for the S3-B3 track going forward. v1/v2/v3's historical results are unaffected (separate config files, this flag was never applied to them, and their own results stand as originally reported under the composed-from-scratch initialization).
+
+Related Records: [[DEC-010]]
