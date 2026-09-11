@@ -515,7 +515,9 @@ Procedure: Ran twice at n=10 to confirm determinism (identical WER both times) b
 
 Actual Result: `{"wer": 0.39918450560652396, "samples": 500, "errors": 0}` -- **39.92% WER**, 0 generation errors.
 
-Comparison (not a controlled comparison -- see caveats): v1 (LoRA q/v, plain fp16 AdamW, 10000 steps) = 23.32%; v3 (LoRA + regularization, same) = 20.70%. S3-B3 (full-decoder, `MasterWeightAdamW`, early-stopped at 843/10000 steps = 8.4% of budget) = 39.92%. S3-B3 is currently substantially WORSE than both LoRA conditions.
+Comparison, historical (not same-set -- see caveats): v1 (LoRA q/v, plain fp16 AdamW, 10000 steps) = 23.32% full test set; v3 (LoRA + regularization, same) = 20.70% full test set.
+
+**Comparison, same-set (2026-09-11, added after external review correctly flagged that "worse than 23.32%" was not yet a same-protocol comparison):** re-ran v1's actual checkpoint (`~/canary-ft/experiments/checkpoints/step=10000-last.ckpt`) through the identical script, identical `--max-samples 500` slice of the identical `test_manifest.json` (both scripts parse the file and slice `[:500]` in the same deterministic order -- same 500 utterances by construction, not re-verified id-by-id), identical forced-greedy decoding, identical text normalization (lowercase+strip in both). Result: **v1 = 24.32%** on this same 500-sample subset -- close to its historical full-test-set 23.32%, a useful internal consistency check that the subset is not unrepresentative. **S3-B3 (39.92%) is worse than v1 (24.32%) on an actual same-set, same-scorer, same-decoding comparison.** The optimizer difference is no longer merely asserted either: v1's own saved checkpoint optimizer state was directly inspected (see [[ISS-011]] update) and confirms real fp16 degeneracy (83.3% of `exp_avg_sq` elements exactly zero) -- so "different optimizer" is a checkpoint-verified confound, not a theoretical one. The early-stopped-budget confound (843/10000 steps for S3-B3, full 10000 for v1) remains real and unresolved -- this comparison does NOT yet support any claim about adaptation scope, only that "this specific S3-B3 checkpoint, evaluated the same way as v1, currently scores worse."
 
 Caveats (do not over-read this number without these):
 - S3-B3 stopped at 8.4% of its configured step budget (early stopping on val_loss plateau, [[VAL-017]]) -- this is not a converged result, and no comparably-early-stopped v1/v3 checkpoint exists to compare against.
@@ -530,7 +532,7 @@ Result: **A real, reportable number, but not yet a fair "adaptation scope" compa
 
 Related Records: [[ISS-011]], [[ISS-013]], [[ISS-014]], [[VAL-017]], [[VAL-018]], [[VAL-020]]
 
-## VAL-020 — Teacher-forced audio-grounding check on S3-B3: model IS acoustically grounded, not just language-modeling plausible ATC phrasing
+## VAL-020 — Teacher-forced audio-permutation check on S3-B3: reference-token prediction is substantially better with matched than permuted audio
 
 Date: 2026-09-10
 Status: COMPLETE, PASS
@@ -541,15 +543,23 @@ Inputs / Configuration: New script `models/canary-qwen/scripts/audio_grounding_c
 
 Procedure: For each batch, compute the model's own training-time cross-entropy loss and next-token accuracy with (a) the batch's real audio-to-transcript pairing, and (b) the audio tensor permuted within the batch via a derangement (no fixed points; text/loss_mask untouched). Inference-only, `torch.no_grad()`, no generation, no sampling, fully deterministic.
 
-Actual Result (mean over 6 batches, 54-87 target tokens each):
-- Correct-audio: loss=0.6277, token accuracy=0.8689
-- Permuted-audio: loss=3.1911, token accuracy=0.4698
-- Delta: loss +2.56 (≈5x worse), accuracy -0.40 (≈46% relative drop)
+Actual Result (mean over 6 batches, 54-87 target tokens each; per-batch values below, not just the mean):
+```
+batch 0: B=4 num_frames=74 | correct loss=0.8545 acc=0.8243 | permuted loss=3.3438 acc=0.4730
+batch 1: B=4 num_frames=64 | correct loss=0.1995 acc=0.9375 | permuted loss=2.9941 acc=0.4531
+batch 2: B=4 num_frames=58 | correct loss=0.8252 acc=0.8793 | permuted loss=3.6113 acc=0.3966
+batch 3: B=4 num_frames=57 | correct loss=0.5684 acc=0.8421 | permuted loss=3.0820 acc=0.5088
+batch 4: B=4 num_frames=87 | correct loss=0.5781 acc=0.8966 | permuted loss=2.9160 acc=0.5057
+batch 5: B=4 num_frames=54 | correct loss=0.7407 acc=0.8333 | permuted loss=3.1992 acc=0.4815
+```
+Mean correct-audio loss=0.6277 (nats/token, natural-log cross-entropy), accuracy=0.8689. Mean permuted-audio loss=3.1911, accuracy=0.4698. Mean delta: +2.56 nats/token (a log-scale quantity -- NOT "5x better grounding"; the ratio of the loss VALUES is ~5x but cross-entropy is logarithmic so that ratio is not itself the effect size to report), accuracy -0.40 absolute.
 
-Consistent in direction and magnitude across all 6 batches individually (loss increase ranged +2.34 to +2.79; accuracy drop ranged -0.33 to -0.48) -- not a fluke of one batch.
+**CORRECTED WORDING (2026-09-11, external review correctly flagged the original framing as overclaiming):** the defensible statement is: *on the tested examples, teacher-forced reference-token prediction is substantially better with matched than permuted audio, demonstrating audio dependence in that evaluation path.* This is NOT the same claim as "the model is clearly audio-grounded" (retracted) -- it does not establish that free-running generation follows supplied audio accurately, that the original training-loss decline was primarily caused by acoustic grounding (vs. some combination with language-modeling), that memorization/transcript-prefix dependence is absent, or that the inference pipeline (tokenizer, prompt template, EOS handling, normalization) is correct end to end. A shared preprocessing defect could in principle still preserve enough signal to produce this delta. Consistent in direction and magnitude across all 6 batches individually (loss increase ranged +2.34 to +2.79; accuracy drop ranged -0.33 to -0.48) -- not a fluke of one batch, but still a teacher-forced diagnostic, not a certificate of pipeline correctness.
 
-Result: **PASS.** The model's loss and token-accuracy are strongly and consistently sensitive to which audio it receives. This is not proof of correct word-level acoustic grounding (e.g. it doesn't test whether specific callsigns/numbers are grounded vs. approximately-right phrasing), but it does rule out the concrete concern that the model's low training loss is audio-independent language modeling. VAL-019's 39.92% WER should be read as a real (if currently mediocre) ASR result, not a symptom of a broken or audio-blind pipeline.
+Held out: ran against `uwb_atcc_test` -- the actual test set the checkpoint's frozen `exp_config.yaml` points at (VAL-017's disclosed leakage concerns split provenance for model-selection purposes, not whether this specific probe is meaningful; no model-selection decision was made from this result).
 
-Limitations: Ran against `uwb_atcc_test` (the leaked-into-validation set per [[VAL-017]]'s disclosure) since that's what the checkpoint's own frozen `exp_config.yaml` points at -- appropriate here since this diagnostic makes no model-selection decision, only probes an existing checkpoint's behavior. Did not test word-level substitution of specific critical content (callsigns/numbers) -- that remains a distinct, not-yet-done analysis (see decision memo's Candidate C).
+Result: **Audio-dependence demonstrated in the teacher-forced path.** Weakens (does not eliminate) the hypothesis that the checkpoint ignores audio. Does not certify the generation/inference pipeline used for VAL-019's WER. A cheaper, still-not-yet-done follow-up: inspect actual correct-audio vs. swapped-audio generated hypotheses (not just loss) to check whether swapped output tracks the replacement recording's transcript rather than merely becoming different.
+
+Limitations: Did not test word-level substitution of specific critical content (callsigns/numbers) -- that remains a distinct, not-yet-done analysis (see decision memo's Candidate C). Did not verify generation-path correctness (tokenizer config, EOS/truncation behavior, prompt template) independent of this teacher-forced measurement.
 
 Related Records: [[VAL-017]], [[VAL-019]], [[ISS-013]]
