@@ -586,3 +586,63 @@ Result: **INVALIDATES this checkpoint as a comparison point, does not inform the
 Next Action: if the same-optimizer scope comparison is still wanted, retry with an earlier, further-from-divergence checkpoint from this run (500/1000/1500/2000) and inspect actual generated text (not just WER or NaN/Inf) before treating any of them as valid, rather than assuming health from step-distance-to-divergence alone. Not yet done -- deprioritized behind the production-run-readiness work.
 
 Related Records: [[ISS-011]], [[VAL-019]], [[VAL-020]]
+
+## VAL-022 — S3-B3 production_v2 (`step=625.ckpt`, corrected init, ISS-013 fix applied): WER 27.48%, real, same-protocol as VAL-019
+
+Date: 2026-09-11
+Status: COMPLETE, real result
+
+Objective: Get the first WER measurement for a full-decoder-FT S3-B3 run that has the NVIDIA-maintainer-documented pretrained-weight-loading fix (ISS-013) actually applied, using the exact same eval protocol as VAL-019 so the two numbers are directly comparable.
+
+Context: `experiments_s3b3_production_v2` was launched with `load_released_pretrained: True` (ISS-013 fix applied and verified: 0 missing/0 unexpected keys at load). val_loss trajectory: best at step=625 (val_loss=0.6588), then 3+ consecutive misses monotonically worsening to 0.7549 by step=1500 (train_loss down to 0.0006-0.03 -- train set memorized). Two independent Opus-5 agents (systems-architect, researcher), briefed with the full trajectory/compute-cost evidence and asked to decide independently, both recommended killing the run and evaluating step=625's real WER before deciding whether to continue/relaunch. Run killed cleanly (SIGTERM, no orphaned processes, all 4 GPUs freed, verified via nvidia-smi) at global_step=1500. `step=625.ckpt` (the best-val checkpoint) was preserved on disk by top-3 ModelCheckpoint regardless of the kill.
+
+Inputs / Configuration: `--base composed`, `--exp-config experiments_s3b3_production_v2/exp_config.yaml`, `--checkpoint step=625.ckpt`, `--max-samples 500`, `test_manifest.json` -- identical protocol to [[VAL-019]] (same forced-greedy `do_sample=False`/`num_beams=1` direct-kwarg decoding, same 500-sample slice, same lowercase+strip normalization).
+
+Procedure: Single-GPU eval, ~1 min consolidation + load, single pass over 500 samples.
+
+Actual Result: `{"wer": 0.2748216106014271, "samples": 500, "errors": 0}` -- **WER 27.48%**. `load_state_dict: 0 missing keys, 0 unexpected keys` (composed architecture matches the checkpoint exactly, ISS-013's structural-mismatch failure mode did not occur). NaN check: 0/1607 tensors.
+
+Comparison (same test_manifest.json, same decoding, same scorer throughout):
+- S3-B3 step=843 (prior run, WITHOUT the ISS-013 fix, val_loss=0.754): 39.92% ([[VAL-019]])
+- **S3-B3 v2 step=625 (THIS run, WITH the ISS-013 fix, val_loss=0.659): 27.48%**
+- v1 (LoRA q/v, plain fp16 AdamW), same 500-sample subset: 24.32%
+- v3 (LoRA + regularization), full test set: 20.70%
+
+Result: **PASS as a real measurement; PARTIAL as a scope conclusion.** Fixing the initialization bug alone closed most of the gap to the LoRA baselines (39.92% -> 27.48%, a ~12.4-point improvement) using FEWER steps (625 vs. 843) from a checkpoint already past its val_loss peak into mild overfitting. The full-decoder-with-correct-init condition is now close to but still behind both LoRA baselines (27.48% vs. 24.32%/20.70%) -- not a clean "scope doesn't matter" or "scope clearly hurts" result on its own.
+
+Remaining Risks / Confounds (unchanged from VAL-019's caveats, still apply): different optimizer (fp32 MasterWeightAdamW here vs. plain fp16 AdamW for v1/v3, [[ISS-011]]), different LR schedule/warmup, different train-cut count (10,619 vs. v1's 11,543), and this checkpoint (step=625) was selected by best-val within an artificially short 1000-micro-batch-per-"epoch" cadence (~1.9 true data epochs), not a step count chosen to match v1/v3's real-epoch budget. A clean scope conclusion still requires a matched-protocol relaunch (same optimizer/LR/regularization/data, step budget set in true data epochs) with both LoRA and full-decoder arms -- not yet done.
+
+Related Records: [[ISS-013]], [[ISS-011]], [[VAL-019]], [[VAL-021]], [[DEC-010]]
+
+## VAL-023 — S3-B3 recalibrated run: val_loss and WER decouple; best-val checkpoint is NOT the best-WER checkpoint
+
+Date: 2026-09-14
+Status: COMPLETE, real result -- methodologically important
+
+Objective: Evaluate the two checkpoints from `experiments_s3b3_recalibrated_production` (bridge_lr=5e-5, max_steps=2000, recalibrated to ~6 true data epochs -- see [[DEC-010]] follow-up work) for WER, same protocol as [[VAL-019]]/[[VAL-022]].
+
+Context: This run's val_loss trajectory peaked (best) at step=500 (val_loss=0.6523, ~1.5 true epochs) then degraded monotonically-with-noise to val_loss=0.7296 by step=2000 (run completed its full max_steps budget; LR fully annealed to 1e-7). Two independent Opus-5 agents diagnosed the cause as a capacity/regularization mismatch (1,411,509,248 trainable params, 49.62% of the model, against only 10,619 training utterances, with `weight_decay=0.0` and no dropout/SpecAugment) -- confirmed not an LR-timing issue since val_loss did not recover as LR annealed to ~0.
+
+Inputs / Configuration: `--base composed`, `--exp-config experiments_s3b3_recalibrated_production/exp_config.yaml`, `--test-manifest test_manifest.json`, `--max-samples 500` -- identical protocol to VAL-019/VAL-022 (forced-greedy `do_sample=False`/`num_beams=1` direct kwargs, lowercase+strip normalization). Ran both checkpoints in parallel on separate GPUs.
+
+Actual Result:
+- `step=500.ckpt` (BEST val_loss, 0.6523): **WER = 26.08%** (`{"wer": 0.26076..., "samples": 500, "errors": 0}`)
+- `step=2000-last.ckpt` (WORST val_loss by this metric, 0.7296, fully trained/most "overfit" by val_loss): **WER = 24.06%** (`{"wer": 0.24063..., "samples": 500, "errors": 0}`)
+
+Both loads clean: 0 missing/0 unexpected keys, 0/1607 NaN tensors.
+
+Result: **val_loss and WER are NOT monotonically related in this regime -- the checkpoint with the best (lowest) val_loss (step=500) has WORSE WER than the checkpoint with the worst val_loss in this run (step=2000).** NeMo's top-k `ModelCheckpoint` (monitor=val_loss) would have selected and kept step=500 as "best," which is actually the wrong choice by the metric the paper actually reports. This is consistent with (not identical to) VAL-019's earlier caution that val_loss is an imperfect proxy for WER, but is a stronger, more direct demonstration: within a single run's own checkpoint set, the metric used for automatic model selection anti-correlates with the metric used for the paper's headline result.
+
+Comparison, same test set/protocol throughout:
+- S3-B3 broken-init, step=843: 39.92% ([[VAL-019]])
+- S3-B3 corrected-init, uncalibrated schedule, step=625: 27.48% ([[VAL-022]])
+- **S3-B3 corrected-init, recalibrated schedule, step=500 (best-val): 26.08%**
+- **S3-B3 corrected-init, recalibrated schedule, step=2000 (fully trained): 24.06%** -- closest full-decoder result yet to v1 LoRA (24.32% same-subset) and v3 LoRA (20.70%)
+- v1 (LoRA), same 500-sample subset: 24.32%
+- v3 (LoRA + SpecAugment + dropout), full test set: 20.70%
+
+Remaining Risks / Confounds: same optimizer/data/eval-set caveats as VAL-022 (fp32 MasterWeightAdamW vs fp16 for v1/v3, train-cut-count difference, validation-set mismatch -- this run validates on dev_cuts while v1/v3 validated on test_cuts, so val_loss is not cross-comparable across arms; WER is). Whether step=2000's better WER despite worse val_loss reflects genuine continued improvement on some aspect of transcription (vs. dev-set-specific overfitting that doesn't generalize to the differently-distributed test set) is not yet understood -- worth checking additional intermediate checkpoints' WER (not just the two extremes) before treating step=2000 as reliably better in general, if further full-decoder tuning is pursued.
+
+**UPDATE (2026-09-14) -- confirmed on the FULL test set, not just noise from the 500-sample subset.** The original 500-sample numbers (26.08%/24.06%) carried wide 95% CIs (~±4pp via normal approximation) that overlapped heavily -- re-ran both checkpoints on the full 2,886-sample test set to check whether the decoupling was real or sampling noise. Result: **step=500 = 26.03% (n=2886), step=2000 = 24.12% (n=2886)** -- nearly identical to the original 500-sample estimates, confirming those were not noise artifacts. Unpaired normal-approximation z-test on the full-set numbers: diff=1.90pp, z=1.67, two-tailed p≈0.095 -- borderline by conventional thresholds, but the replication across two independent sample sizes (500 and 2886) at nearly the same magnitude is more convincing than the p-value alone suggests; a proper paired test (same utterances, both checkpoints) would likely tighten this further but requires per-utterance data `eval_finetuned.py` does not currently save. An independent Opus researcher agent's literature-grounded analysis (citing Guo et al. arXiv:1706.04599 on NLL/calibration drift diverging from error-rate improvement) offers a plausible mechanism: the val_loss degradation past step=500 may reflect miscalibration, not the model actually getting worse at transcription -- consistent with WER continuing to improve past the val_loss peak. See [[EXP-014]] for the fuller multi-version, epoch-normalized comparison this result feeds into.
+
+Related Records: [[VAL-019]], [[VAL-022]], [[DEC-010]], [[EXP-014]]
