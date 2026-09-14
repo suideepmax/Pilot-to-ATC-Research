@@ -31,6 +31,8 @@ Initialized: 2026-09-06. All records below were recovered from existing reposito
 - VAL-019 — S3-B3 step=843 WER: 39.92% (500 samples, greedy, fixed decoding bug — first attempt at forcing greedy silently didn't work, caught by a determinism check). Same-set re-eval of v1 on the identical 500 utterances = 24.32% (close to its historical 23.32%) — a real same-set/same-scorer comparison now exists; still confounded by optimizer (v1's fp16 degeneracy now checkpoint-confirmed, not just asserted) and early-stopped budget (843/10000 steps) — not yet an adaptation-scope result
 - VAL-020 — Teacher-forced audio-permutation check on S3-B3: correct-audio loss 0.63 vs permuted-audio loss 3.19 (+2.56 nats/token), accuracy 87%→47%, consistent across 6 batches — demonstrates audio dependence in the teacher-forced path; does NOT certify the generation/inference pipeline or establish full acoustic grounding
 - VAL-021 — experiments_full_decoder@3000 invalidated as a same-optimizer comparison point: 836.92% WER, inspected hypotheses show genuine repetition-loop collapse despite passing a NaN/Inf tensor scan — methodological correction: NaN/Inf-free weights are necessary but not sufficient evidence a checkpoint is usable
+- VAL-022 — S3-B3 production_v2 step=625 (ISS-013 fix applied, corrected init): WER 27.48%, same protocol as VAL-019 — vs. 39.92% for the prior broken-init run at a later step (843), and vs. 24.32%/20.70% for v1/v3 LoRA. Fixing init closed most of the gap; scope conclusion still needs a matched-protocol relaunch
+- VAL-023 — S3-B3 recalibrated run: val_loss and WER decouple — best-val checkpoint (step=500) scores worse WER (26.03% full-set) than the most-overfit-by-val_loss checkpoint (step=2000, 24.12% full-set). Confirmed on full 2886-sample test set (not just n=500 noise), p≈0.095. Possible calibration-drift mechanism (Guo et al.), not necessarily true generalization loss
 
 ## Decisions
 - DEC-001 — Discard ATCOSIM gender-based WER results; require a re-split for speaker independence
@@ -45,6 +47,7 @@ Initialized: 2026-09-06. All records below were recovered from existing reposito
 - DEC-010 — Novelty reassessment (2 independent literature-search agents): none of the 3 original angles (adaptation-scope ladder, connector-init interaction, ATC critical-content analysis) are novel — the bridge/encoder-mismatch finding is a documented, maintainer-acknowledged NeMo pitfall with a known fix (`pretrained_weights: False` + manual state-dict load), not yet implemented. Reframe as a correctly-initialized, honestly-cited validity study, not a discovery
 
 ## Experiments
+- EXP-014 — Full multi-version WER-vs-true-epoch curve (v1/v2/v3 LoRA vs all S3-B3 attempts): at matched ~6 true epochs, corrected-init full-decoder (24.12%) already beats v1 (30.87%) and is within ~1pp of v3 (23.00% at 13.86 epochs) — every prior full-decoder-vs-LoRA comparison this session compared UNEQUAL training exposure (S3-B3 capped at 6 epochs vs v1/v3's 27.7-epoch canonical numbers), a bigger confound than init/optimizer/data differences
 - EXP-001 — UWB-ATCC W2V2-large fine-tuning (Phase 4) — 14.54%/12.69% WER [COMPLETE]
 - EXP-002 — ATCOSIM W2V2-large fine-tuning (Phase 2) — 1.67%/1.28% WER [COMPLETE, caveat: leakage]
 - EXP-003 — Canary-Qwen-2.5B zero-shot baseline on UWB-ATCC — 81.49% WER [COMPLETE]

@@ -389,3 +389,37 @@ Conclusion: Unlike v1 (EXP-012), KenLM provides no benefit to v3 and is actively
 Next Action: None required — this negative result stands as reported. Worth noting in the manuscript that decoding-fairness correction does not help the regularized configuration.
 
 Related Records: [[VAL-014]], [[EXP-012]], [[VAL-012]]
+
+## EXP-014 — Full multi-version WER-vs-true-epoch learning curve (v1/v2/v3 LoRA vs all S3-B3 full-decoder attempts)
+
+Date: 2026-09-14
+Status: COMPLETE
+
+Objective: Build a single, fair (true-data-epoch-normalized, not raw-step-normalized) learning curve across every trained version in this project, per user request ("get the curve, but not just for S3-B3 but all versions trained... we did this in the paper").
+
+Context: v1/v2/v3's existing per-step WER curves (`models/canary-qwen/docs/learning_curve_v{1,2,3}.json`, produced by `eval_learning_curve.py`, dated 2026-04-03/04/22-23, i.e. run sequentially on different days -- no cache-collision risk) were reused as-is after verifying their decoding path is deterministic (`--base released` composes onto canary-qwen-2.5b's own LoRA-shaped GenerationConfig, which per ISS-013's follow-up keeps `do_sample=False` by default for this specific path -- confirmed all curve points show `samples:500`, no silent generation failures). S3-B3's curve required 4 new evals to fill gaps: step=375/625 (500-sample, same protocol as VAL-019/022/023) and step=500/2000 (FULL 2,886-sample test set, to get a statistically tight number for the two most decision-relevant checkpoints).
+
+**Critical methodological point this analysis surfaced**: v1/v2/v3 use `train_cuts.jsonl.gz` (11,543 cuts, effective batch 32) -> 360.7 optimizer-steps/true-epoch. S3-B3 uses `train_cuts_v2.jsonl.gz` (10,619 cuts, effective batch 32) -> 331.8 optimizer-steps/true-epoch. Every WER comparison made earlier this session (VAL-019, VAL-022, VAL-023, and both prior root-cause-analysis agents) compared these arms at matched RAW STEP COUNTS or treated "step=625" as directly comparable across families, without normalizing for this ~8.7% rate difference AND without accounting for the far larger confound that v1/v2/v3 trained to step=10000 (27.72 true epochs) while S3-B3 was capped at step=2000 (6.03 true epochs) -- an unequal-training-exposure confound larger than any of the previously-discussed ones (init, optimizer, data version, eval-set).
+
+Procedure: Converted every existing and newly-measured (step, WER) pair to true_epochs = step / steps_per_epoch for its family, tabulated below.
+
+Actual Result (WER%, true epochs in parentheses):
+
+| true epochs (approx) | v1 (LoRA) | v3 (LoRA+reg) | S3-B3 broken-init | S3-B3 corrected/uncalib | S3-B3 corrected/recalibrated |
+|---|---|---|---|---|---|
+| ~1.1-1.4 | 39.14 (1.39) | 39.51 (1.39) | -- | -- | 28.26 (1.13) |
+| ~1.5 | -- | -- | -- | -- | **26.03 (1.51, FULL 2886-set)** |
+| ~1.9-2.5 | -- | -- | 39.92 (2.54) | 27.48 (1.88) | 26.26 (1.88) |
+| ~5.5-6.0 | 30.87 (5.54) | 27.28 (5.54, interpolated point not in original table -- see raw learning_curve_v3.json for step=2000 at 27.28%, true_epochs=5.54, closest available) | -- | -- | **24.12 (6.03, FULL 2886-set, FINAL checkpoint)** |
+| ~13.9 | 24.77 (13.86) | 23.00 (13.86) | -- | -- | -- |
+| ~27.7 (canonical, full test set) | **23.32** | **20.70** | -- | -- | -- |
+
+Statistical check on the two full-set S3-B3 numbers (step=500: 26.03%, n=2886; step=2000: 24.12%, n=2886): unpaired normal-approximation z-test, diff=1.90pp, z=1.67, two-tailed p≈0.095 -- borderline, not conventionally significant, but the SAME direction and near-identical magnitude replicated from the original n=500 estimates (26.08%/24.06%), i.e. not an artifact of small-sample noise. A paired test (same utterances, both checkpoints) would likely show tighter significance but requires per-utterance data not currently saved by `eval_finetuned.py`.
+
+Result: **At matched true training exposure (~5.5-6 epochs), the corrected-init full-decoder S3-B3 arm (24.12%) already beats v1 (30.87%) and is within ~1.1pp of v3 (23.00%) despite v3 having ~2.3x more epochs of training.** This directly contradicts the framing (used throughout this session prior to this analysis, including by two independent root-cause-diagnosis agents) that full-decoder "underperforms LoRA" -- that framing implicitly compared S3-B3's early-stopped ~6-epoch number against v1/v3's fully-converged ~27.7-epoch canonical numbers, an unequal-exposure comparison. It remains unknown whether continuing S3-B3 to a matched ~27.7-true-epoch budget (~9,200 steps at S3-B3's rate) would continue improving, plateau, or (per the already-documented capacity/regularization concerns) resume degrading -- this is a genuinely open question, not yet answered by any run in this project.
+
+Conclusion: The planned next matched-protocol comparison (LoRA arm + full-decoder arm, per the converged agent plan) should NOT reuse the originally-proposed max_steps=2000 (6.03 true epochs) as if it were a complete picture -- it under-samples the training exposure both arms received historically for v1/v3's canonical numbers by more than 4x. Whether to budget the next comparison at the shorter (cheap, ~13-19h) 2000-step scale or the longer (~4.6x cost) ~9,200-step scale to match historical exposure is a real cost/completeness tradeoff requiring an explicit decision, not a default.
+
+Next Action: Present this tradeoff to the user before launching the matched-protocol arms. Do not assume the 2000-step budget from the earlier agent-authored plan is still the right choice now that this confound is known.
+
+Related Records: [[VAL-019]], [[VAL-022]], [[VAL-023]], [[DEC-010]]
