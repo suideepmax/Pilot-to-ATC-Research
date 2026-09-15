@@ -1,0 +1,212 @@
+# MATCHED-PROTOCOL full-decoder arm (2026-09-14, EXP-014 follow-up).
+# Same corrected-init recipe as salm_uwb_atcc_s3b3_recalibrated.yaml, with
+# three changes made after EXP-014's epoch-normalized multi-version curve
+# and an independent research agent's literature-grounded stress test of the
+# "capacity/regularization mismatch" hypothesis (research_log/EXPERIMENTS.md
+# EXP-014, research_log/VALIDATION.md VAL-023 update):
+#
+#   1. max_steps 2000 -> 9200, warmup_steps 100 -> 460 (same 5% fraction).
+#      EXP-014 found that at matched ~6 true epochs (step=2000), this recipe
+#      ALREADY beats v1 (24.12% vs 30.87%) and is within ~1pp of v3, despite
+#      v1/v3 training to 27.72 true epochs (step=10000 at their own
+#      360.7-opt-step/epoch rate). 9200 steps = 27.72 true epochs at THIS
+#      recipe's 331.8-opt-step/epoch rate (10,619-cut train_cuts_v2.jsonl.gz,
+#      effective batch 32) -- i.e. matched total training exposure to v1/v3's
+#      canonical numbers, not matched raw step count. Whether performance
+#      keeps improving, plateaus, or degrades again by this point is the open
+#      question this run is FOR.
+#   2. Added perception.spec_augment (identical block to salm_uwb_atcc_v3.yaml).
+#      An independent research agent's literature review (citing Guo et al.
+#      arXiv:1706.04599 on val_loss/calibration drift, and re-examining the
+#      v1->v3 ablation) confirmed regularization has a real, verified effect
+#      in this exact codebase (v1->v3 at matched LoRA capacity: -2.62pp WER)
+#      -- this is the one intervention with actual evidence behind it, unlike
+#      "freeze more decoder layers" (rejected: ~50M params/layer is far too
+#      coarse a knob, no principled stopping point). No decoder-dropout
+#      equivalent is added (Qwen3Config only exposes attention_dropout=0.0,
+#      not wired through this project's model-composition path, and was not
+#      verified working -- left as a known asymmetry vs the LoRA arm, which
+#      gets lora_dropout=0.1 for architectural reasons LoRA does and full
+#      decoder-FT cannot replicate).
+#   3. checkpoint_callback_params changed to every_n_train_steps=920 (10
+#      checkpoints spanning the run) + save_top_k=-1 (keep all 10), instead
+#      of val_loss-triggered top-3. VAL-023 found val_loss and WER decouple
+#      in this recipe (the best-val_loss checkpoint had WORSE WER than a
+#      later, worse-val_loss checkpoint) -- checkpoint SELECTION for this
+#      run's headline result must happen post-hoc by WER on saved
+#      checkpoints, not by trusting NeMo's val_loss-based top-k save.
+#      Disk cost: ~22GB/checkpoint (1.41B trainable params' fp32 master
+#      weights + exp_avg/exp_avg_sq dominate) x 10 = ~220GB -- evaluate and
+#      prune down to the WER-best checkpoint(s) before launching any other
+#      large job on this machine.
+#
+# CORRECTED (2026-09-14, Opus verification review, defect #1): weight_decay
+# 0.0 -> 1e-2. The claim this replaces ("proven numerically inert in this
+# fp16 codebase") is WRONG for THIS optimizer -- ISS-011's inertness finding
+# was specific to the degenerate PLAIN fp16 AdamW that MasterWeightAdamW
+# exists to fix. MasterWeightAdamW applies decay to the fp32 MASTER weight
+# (master_weight_adamw.py: `master.mul_(1 - lr * wd)`), which does NOT round
+# away at these magnitudes. Leaving this arm at 0.0 while the matched LoRA
+# arm uses 1e-2 (matching v3) would be an active, uncontrolled regularization
+# difference on exactly the axis (regularization) this comparison is
+# supposed to isolate. Set to 1e-2 to match the LoRA arm -- defensible either
+# way per Opus's review, but the two arms MUST match.
+#
+# CORRECTED (2026-09-14, Opus verification review, defect #2): decoder lr
+# (1e-5) and bridge_lr (5e-5) were inherited UNCHANGED from the 2000-step
+# recalibrated config without being re-probed for this 4.6x-longer, 9200-step
+# run. Opus's review flagged this as an asymmetry against the LoRA arm's own
+# 3-point LR probe (unjustified per the LoRA config's own cited reasoning,
+# Biderman et al. arXiv:2405.09673, for tuning LR per adaptation method) --
+# probe both arms or neither. A matching decoder-lr probe (5e-6/1e-5/2e-5,
+# short runs, selected by DEV-set WER -- never test-set, see below) must be
+# run before this config's lr is trusted for the full 9200-step launch.
+#
+# CORRECTED (2026-09-14, Opus verification review): checkpoint selection for
+# this run's headline WER number must use the DEV set (dev_manifest.json /
+# dev_cuts.jsonl.gz), never the test set, across all 10 saved checkpoints --
+# touching the test set once per candidate checkpoint would contaminate the
+# final reported number (the same class of leak already recorded in
+# VAL-017). Evaluate all checkpoints on dev, pick one WER-best checkpoint,
+# THEN touch the test set exactly once for that checkpoint's final number.
+#
+# See salm_uwb_atcc_s3b3_recalibrated.yaml and salm_uwb_atcc_s3b3_fixed.yaml
+# for the fuller history this config inherits.
+
+model:
+  pretrained_llm: Qwen/Qwen3-1.7B
+  pretrained_asr: nvidia/canary-1b-flash
+  pretrained_weights: True
+  load_released_pretrained: True
+
+  freeze_params:
+    - "^perception\\.preprocessor\\..+$"
+    - "^perception\\.encoder\\..+$"
+    - "^embed_tokens\\..+$"
+    - "^llm\\.lm_head\\..+$"
+  prevent_freeze_params: []
+
+  prompt_format: qwen
+  audio_locator_tag: "<|audioplaceholder|>"
+
+  gradient_clip_val_unscaled: 1000.0
+
+  perception:
+    target: nemo.collections.speechlm2.modules.perception.AudioPerceptionModule
+    output_dim: 2048
+    modality_adapter:
+      _target_: nemo.collections.speechlm2.modules.perception.IdentityConnector
+      d_model: 1024
+    spec_augment:
+      _target_: nemo.collections.asr.modules.SpectrogramAugmentation
+      freq_masks: 2
+      time_masks: 10
+      freq_width: 27
+      time_width: 5
+
+  optimizer:
+    _target_: master_weight_adamw.MasterWeightAdamW
+    lr: 1e-5  # PLACEHOLDER pending the decoder-lr probe (5e-6/1e-5/2e-5) -- see header
+    bridge_lr: 5e-5
+    betas: [0.9, 0.98]
+    weight_decay: 1e-2
+    eps: 1e-8
+    loss_scale: 1024.0
+
+  lr_scheduler:
+    _target_: nemo.core.optim.lr_scheduler.CosineAnnealing
+    warmup_steps: 460
+    min_lr: 1e-7
+    max_steps: ${trainer.max_steps}
+
+trainer:
+  devices: 4
+  accelerator: gpu
+  num_nodes: 1
+  precision: 16-true
+  logger: False
+  enable_checkpointing: False
+  use_distributed_sampler: False
+  max_steps: 9200
+  limit_train_batches: 1000
+  limit_val_batches: 200
+  log_every_n_steps: 50
+  num_sanity_val_steps: 1
+  accumulate_grad_batches: 8
+  strategy:
+    _target_: lightning.pytorch.strategies.ModelParallelStrategy
+    tensor_parallel_size: 1
+    data_parallel_size: 4
+
+data:
+  train_ds:
+    sample_rate: 16000
+    prompt_format: ${model.prompt_format}
+    token_equivalent_duration: 0.08
+    input_cfg:
+      - type: lhotse_as_conversation
+        cuts_path: /home/kotasthane/canary-ft/data/train_cuts_v2.jsonl.gz
+        audio_locator_tag: ${model.audio_locator_tag}
+        tags:
+          context: "Transcribe the following:"
+    seed: 1234
+    shuffle: true
+    shard_seed: "randomized"
+    num_workers: 1
+    batch_size: 1
+
+  validation_ds:
+    prompt_format: ${model.prompt_format}
+    token_equivalent_duration: 0.08
+    datasets:
+      uwb_atcc_dev:
+        input_cfg:
+          - type: lhotse_as_conversation
+            cuts_path: /home/kotasthane/canary-ft/data/dev_cuts.jsonl.gz
+            audio_locator_tag: ${model.audio_locator_tag}
+            tags:
+              context: "Transcribe the following:"
+    sample_rate: 16000
+    batch_size: 1
+    seed: 1234
+    shard_seed: 1234
+
+exp_manager:
+  exp_dir: null
+  explicit_log_dir: /home/kotasthane/canary-ft/experiments_matched_full_decoder/
+  name: canary_uwb_atcc_matched_full_decoder
+  create_tensorboard_logger: False
+  create_checkpoint_callback: true
+  use_datetime_version: true
+  max_time_per_run: "04:00:00:00"  # raised from 3d (Opus review: 22.45s/step measured x 9200 steps = 57.4h -- 3d left only ~25% margin)
+  resume_if_exists: false
+  resume_ignore_no_checkpoint: true
+  create_wandb_logger: false
+  create_early_stopping_callback: true
+  early_stopping_callback_params:
+    monitor: val_loss
+    mode: min
+    min_delta: 0.0
+    patience: 100000
+    check_finite: true
+    divergence_threshold: 50.0
+  checkpoint_callback_params:
+    filename: "{step}"
+    monitor: val_loss
+    mode: min
+    # every_n_train_steps 920->2300 (2026-09-15, disk-constrained adaptation):
+    # rm is being denied by the permission system this session (a stricter
+    # gate than the training-compute pre-authorization), so the old smoke-test
+    # dirs occupying ~230GB cannot be reclaimed right now. Verified directly:
+    # each full-decoder checkpoint is 22GB (du -sh on experiments_specaugment_probe's
+    # checkpoints), and only 178GB is free. 2300-step spacing gives 4
+    # checkpoints (steps 2300/4600/6900/9200) = ~88GB for this arm, leaving
+    # room for the LoRA arm's much smaller (~5.7GB) checkpoints without any
+    # deletion. Coarser WER-vs-epoch resolution than originally planned
+    # (25/50/75/100% of the run instead of 10 points), but still sufficient
+    # to see the qualitative trend (improve/plateau/degrade).
+    every_n_train_steps: 2300
+    every_n_epochs: null
+    save_top_k: -1
+    always_save_nemo: false
+    save_nemo_on_train_end: false

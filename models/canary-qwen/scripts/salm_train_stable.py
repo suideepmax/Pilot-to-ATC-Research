@@ -520,16 +520,56 @@ def train(cfg):
     if cfg.model.get("load_released_pretrained", False):
         from torch.distributed.tensor import DTensor, distribute_tensor
 
+        has_local_lora = cfg.model.get("lora", None) is not None
         if torch.distributed.get_rank() == 0:
             logging.info("load_released_pretrained=True: loading nvidia/canary-qwen-2.5b's "
                          "actual trained weights (bridge + encoder + LoRA-merged decoder) "
-                         "on top of the fresh composition, per ISS-013's documented fix.")
+                         "on top of the fresh composition, per ISS-013's documented fix. "
+                         f"has_local_lora={has_local_lora}.")
         ref = SALM.from_pretrained("nvidia/canary-qwen-2.5b")
         ref.llm = ref.llm.merge_and_unload()
         ref_state = ref.state_dict()
         del ref
 
         model_state = model.state_dict()
+
+        if has_local_lora:
+            # Matched-protocol requirement (2026-09-14, EXP-014 follow-up): the
+            # LoRA arm must start from the EXACT SAME decoder weights as the
+            # full-decoder arm (the merged, released, corrected-init decoder),
+            # with its OWN LoRA adapters at PEFT's standard cold-start init
+            # (lora_B=0 -> zero initial delta) -- NOT NVIDIA's own already-
+            # trained LoRA delta (which merge_and_unload() above already folded
+            # into ref_state's plain weights and is therefore unrecoverable
+            # separately; this is intentional, not a limitation, since
+            # transferring NVIDIA's own adaptation would NOT be a fair "fresh
+            # LoRA adaptation" starting point). The local model's own state_dict
+            # has PEFT-prefixed keys (llm.base_model.model.<rest>, with
+            # LoRA-targeted Linear layers additionally wrapping their base
+            # weight as <rest>.base_layer.weight/.bias) instead of ref_state's
+            # plain (llm.<rest>) keys. Verified directly (toy check, 2026-09-14):
+            # every one of ref_state's 1607 keys maps onto exactly one of the
+            # local LoRA model's keys under this transform, with 0 unmapped;
+            # the local model's remaining 112 keys (28 layers x 2 target
+            # modules x 2 lora_A/lora_B) are exactly the fresh-init adapter
+            # params, correctly left untouched by this load.
+            def _map_key(k: str) -> str:
+                if not k.startswith("llm."):
+                    return k
+                rest = k[len("llm."):]
+                candidate = f"llm.base_model.model.{rest}"
+                if candidate in model_state:
+                    return candidate
+                for suffix in (".weight", ".bias"):
+                    if rest.endswith(suffix):
+                        candidate2 = f"llm.base_model.model.{rest[:-len(suffix)]}.base_layer{suffix}"
+                        if candidate2 in model_state:
+                            return candidate2
+                raise KeyError(f"load_released_pretrained: could not map ref key {k!r} onto "
+                                f"the local LoRA-wrapped model's state_dict -- LoRA config "
+                                f"mismatch between the released model and this run's model.lora?")
+            ref_state = {_map_key(k): v for k, v in ref_state.items()}
+
         converted = {}
         for k, v in ref_state.items():
             existing = model_state[k]
@@ -537,10 +577,18 @@ def train(cfg):
                 converted[k] = distribute_tensor(v.to(existing.device_mesh.device_type), existing.device_mesh, existing.placements)
             else:
                 converted[k] = v
-        load_result = model.load_state_dict(converted, strict=True)
+        load_result = model.load_state_dict(converted, strict=False if has_local_lora else True)
         if torch.distributed.get_rank() == 0:
             logging.info(f"load_released_pretrained: loaded {len(converted)} tensors, "
                          f"missing={load_result.missing_keys}, unexpected={load_result.unexpected_keys}")
+            if has_local_lora:
+                n_missing = len(load_result.missing_keys)
+                assert n_missing == 112, (
+                    f"load_released_pretrained with LoRA: expected exactly 112 missing keys "
+                    f"(the fresh-init lora_A/lora_B adapter params, left untouched by design), "
+                    f"got {n_missing}. Investigate before trusting this run's initialization: "
+                    f"missing={load_result.missing_keys}")
+                assert len(load_result.unexpected_keys) == 0
 
     model._metrics_log_path = str(log_dir / "val_metrics.jsonl")
 
