@@ -1,0 +1,197 @@
+# MATCHED-PROTOCOL LoRA arm (2026-09-14, EXP-014 follow-up).
+# Identical init/optimizer-class/data/eval-set/schedule to
+# salm_uwb_atcc_matched_full_decoder.yaml -- the ONLY intended difference is
+# adaptation scope (LoRA r=128 on q/v vs full decoder unfrozen). This is the
+# other half of the matched-protocol comparison DEC-010 called for.
+#
+# Init: model.load_released_pretrained=True + model.lora both set. This
+# requires the salm_train_stable.py code path (2026-09-14 fix) that skips
+# merge_and_unload() and instead maps the released model's MERGED weights
+# onto this run's LoRA-wrapped parameter names (llm.base_model.model.<rest>,
+# with LoRA-targeted Linear layers' base weight further nested under
+# <rest>.base_layer.<weight/bias>) -- verified directly (toy check) that all
+# 1607 merged reference keys map cleanly with 0 unmapped, and the local
+# model's remaining 112 keys (28 layers x 2 target modules x 2 lora_A/lora_B)
+# are exactly the fresh cold-start adapter params (lora_B=0 -> zero initial
+# delta). This means BOTH arms start from IDENTICAL decoder weights at step
+# 0 -- this run's LoRA adapters contribute nothing until trained, exactly
+# matching standard LoRA cold-start convention and NOT transferring NVIDIA's
+# own already-trained LoRA delta (which would not be a fair "fresh adaptation"
+# starting point for this comparison).
+#
+# prevent_freeze_params MUST include the lora_ keep-pattern below --
+# salm_train_stable.py's freeze_and_subset() (nemo.collections.speechlm2.
+# parts.optim_setup) has NO LoRA-specific special-casing; it applies
+# freeze_params's `^llm\.+$` regex to LoRA adapter parameter names too
+# (they all start with `llm.base_model.model...`). Verified directly (toy
+# check, 2026-09-14): with prevent_freeze_params=[] (what
+# salm_uwb_atcc_v3.yaml uses, under presumably a different/older training
+# script), THIS script's freeze_and_subset would silently freeze every
+# lora_A/lora_B parameter too -- producing a fully-frozen, non-learning LoRA
+# arm with no visible error. With prevent_freeze_params as set below,
+# confirmed exactly 27,789,312 trainable parameters (matches the verified
+# real v3 LoRA trainable count), all of them lora_A/lora_B/bridge params.
+#
+# lora_dropout=0.1 matches the released model's own embedded LoRA config
+# (r=128, alpha=256, target_modules=[q_proj,v_proj], confirmed by loading
+# nvidia/canary-qwen-2.5b directly and inspecting its installed PeftConfig)
+# and matches salm_uwb_atcc_v3.yaml's value. spec_augment block is identical
+# to v3's and to the matched full-decoder arm's (symmetric regularization --
+# see that config's header for why asymmetric regularization would
+# reintroduce the exact confound this comparison is trying to eliminate).
+#
+# model.optimizer.lr below (5e-4) is a PLACEHOLDER matching v3's historical
+# value -- the actual value for the production run must come from the
+# mandatory 3-point LR probe (1e-4/3e-4/5e-4, selected by dev-set WER) run
+# before this config is launched at full scale, per Biderman et al.
+# (arXiv:2405.09673) tuning LR per-adaptation-method rather than sharing one
+# value across LoRA and full-FT. Override via
+# model.optimizer.lr=<probe-winner> at launch; do not launch with the
+# placeholder value un-overridden.
+#
+# CORRECTED (2026-09-14, Opus verification review): the matched full-decoder
+# arm (salm_uwb_atcc_matched_full_decoder.yaml) must ALSO get an equivalent
+# decoder-lr probe (5e-6/1e-5/2e-5) before launch -- Opus's review flagged
+# probing only this arm's LR as an unjustified asymmetry (self-contradicting
+# given this config's own cited reasoning above for why per-method LR tuning
+# matters). Do not launch either production run until both probes are done.
+# Checkpoint/LR selection for BOTH arms must use DEV-set WER only
+# (dev_manifest.json) -- reserve the test set for exactly one touch per arm's
+# final selected checkpoint (VAL-017 already records a prior test-as-val
+# leak in this project; do not repeat it here across 10 checkpoints x 2 arms
+# x however many LR-probe candidates).
+
+model:
+  pretrained_llm: Qwen/Qwen3-1.7B
+  pretrained_asr: nvidia/canary-1b-flash
+  pretrained_weights: True
+  load_released_pretrained: True
+
+  freeze_params:
+    - "^llm\\..+$"
+    - "^embed_tokens\\..+$"
+    - "^perception\\.preprocessor\\..+$"
+    - "^perception\\.encoder\\..+$"
+  prevent_freeze_params:
+    - "^.+\\.lora_.+$"
+
+  lora:
+    task_type: CAUSAL_LM
+    r: 128
+    lora_alpha: 256
+    lora_dropout: 0.1
+    target_modules: ["q_proj", "v_proj"]
+
+  prompt_format: qwen
+  audio_locator_tag: "<|audioplaceholder|>"
+
+  gradient_clip_val_unscaled: 1000.0
+
+  perception:
+    target: nemo.collections.speechlm2.modules.perception.AudioPerceptionModule
+    output_dim: 2048
+    modality_adapter:
+      _target_: nemo.collections.speechlm2.modules.perception.IdentityConnector
+      d_model: 1024
+    spec_augment:
+      _target_: nemo.collections.asr.modules.SpectrogramAugmentation
+      freq_masks: 2
+      time_masks: 10
+      freq_width: 27
+      time_width: 5
+
+  optimizer:
+    _target_: master_weight_adamw.MasterWeightAdamW
+    lr: 5e-4  # PLACEHOLDER -- override from the LR probe before production launch
+    bridge_lr: 5e-5
+    betas: [0.9, 0.98]
+    weight_decay: 1e-2
+    eps: 1e-8
+    loss_scale: 1024.0
+
+  lr_scheduler:
+    _target_: nemo.core.optim.lr_scheduler.CosineAnnealing
+    warmup_steps: 460
+    min_lr: 1e-7
+    max_steps: ${trainer.max_steps}
+
+trainer:
+  devices: 4
+  accelerator: gpu
+  num_nodes: 1
+  precision: 16-true
+  logger: False
+  enable_checkpointing: False
+  use_distributed_sampler: False
+  max_steps: 9200
+  limit_train_batches: 1000
+  limit_val_batches: 200
+  log_every_n_steps: 50
+  num_sanity_val_steps: 1
+  accumulate_grad_batches: 8
+  strategy:
+    _target_: lightning.pytorch.strategies.ModelParallelStrategy
+    tensor_parallel_size: 1
+    data_parallel_size: 4
+
+data:
+  train_ds:
+    sample_rate: 16000
+    prompt_format: ${model.prompt_format}
+    token_equivalent_duration: 0.08
+    input_cfg:
+      - type: lhotse_as_conversation
+        cuts_path: /home/kotasthane/canary-ft/data/train_cuts_v2.jsonl.gz
+        audio_locator_tag: ${model.audio_locator_tag}
+        tags:
+          context: "Transcribe the following:"
+    seed: 1234
+    shuffle: true
+    shard_seed: "randomized"
+    num_workers: 1
+    batch_size: 1
+
+  validation_ds:
+    prompt_format: ${model.prompt_format}
+    token_equivalent_duration: 0.08
+    datasets:
+      uwb_atcc_dev:
+        input_cfg:
+          - type: lhotse_as_conversation
+            cuts_path: /home/kotasthane/canary-ft/data/dev_cuts.jsonl.gz
+            audio_locator_tag: ${model.audio_locator_tag}
+            tags:
+              context: "Transcribe the following:"
+    sample_rate: 16000
+    batch_size: 1
+    seed: 1234
+    shard_seed: 1234
+
+exp_manager:
+  exp_dir: null
+  explicit_log_dir: /home/kotasthane/canary-ft/experiments_matched_lora/
+  name: canary_uwb_atcc_matched_lora
+  create_tensorboard_logger: False
+  create_checkpoint_callback: true
+  use_datetime_version: true
+  max_time_per_run: "04:00:00:00"  # raised from 3d (Opus review: 22.45s/step measured x 9200 steps = 57.4h -- 3d left only ~25% margin)
+  resume_if_exists: false
+  resume_ignore_no_checkpoint: true
+  create_wandb_logger: false
+  create_early_stopping_callback: true
+  early_stopping_callback_params:
+    monitor: val_loss
+    mode: min
+    min_delta: 0.0
+    patience: 100000
+    check_finite: true
+    divergence_threshold: 50.0
+  checkpoint_callback_params:
+    filename: "{step}"
+    monitor: val_loss
+    mode: min
+    every_n_train_steps: 920
+    every_n_epochs: null
+    save_top_k: -1
+    always_save_nemo: false
+    save_nemo_on_train_end: false

@@ -646,3 +646,40 @@ Remaining Risks / Confounds: same optimizer/data/eval-set caveats as VAL-022 (fp
 **UPDATE (2026-09-14) -- confirmed on the FULL test set, not just noise from the 500-sample subset.** The original 500-sample numbers (26.08%/24.06%) carried wide 95% CIs (~±4pp via normal approximation) that overlapped heavily -- re-ran both checkpoints on the full 2,886-sample test set to check whether the decoupling was real or sampling noise. Result: **step=500 = 26.03% (n=2886), step=2000 = 24.12% (n=2886)** -- nearly identical to the original 500-sample estimates, confirming those were not noise artifacts. Unpaired normal-approximation z-test on the full-set numbers: diff=1.90pp, z=1.67, two-tailed p≈0.095 -- borderline by conventional thresholds, but the replication across two independent sample sizes (500 and 2886) at nearly the same magnitude is more convincing than the p-value alone suggests; a proper paired test (same utterances, both checkpoints) would likely tighten this further but requires per-utterance data `eval_finetuned.py` does not currently save. An independent Opus researcher agent's literature-grounded analysis (citing Guo et al. arXiv:1706.04599 on NLL/calibration drift diverging from error-rate improvement) offers a plausible mechanism: the val_loss degradation past step=500 may reflect miscalibration, not the model actually getting worse at transcription -- consistent with WER continuing to improve past the val_loss peak. See [[EXP-014]] for the fuller multi-version, epoch-normalized comparison this result feeds into.
 
 Related Records: [[VAL-019]], [[VAL-022]], [[DEC-010]], [[EXP-014]]
+
+## VAL-024 — SpecAugment gate-test probe: flattens the full-decoder overfitting pattern (val_loss), clean 2000-step run
+
+Date: 2026-09-15
+Status: COMPLETE, real result
+
+Objective: Before committing ~460 GPU-hours to a long (9200-step) matched-protocol full-decoder-vs-LoRA comparison, test cheaply (~50 GPU-hours, 2000 steps) whether adding SpecAugment actually fixes the fast-overfitting pattern seen in two prior full-decoder runs (VAL-023 and its predecessor). This was Opus's recommended gate test from its review of the matched-protocol plan.
+
+Inputs / Configuration: `salm_uwb_atcc_recalibrated_specaugment_probe.yaml` -- byte-identical to `salm_uwb_atcc_s3b3_recalibrated.yaml` (lr=1e-5, bridge_lr=5e-5, weight_decay=0.0, max_steps=2000, warmup_steps=100) with ONLY `perception.spec_augment` added (v3's exact block: freq_masks=2, time_masks=10, freq_width=27, time_width=5). Deliberately did not also change weight_decay to keep this a single-variable test.
+
+Actual Result -- full val_loss trajectory vs. the reference run (`experiments_s3b3_recalibrated_production`, no SpecAugment):
+
+| step | Reference | SpecAugment probe |
+|---|---|---|
+| 125 | 0.919 | 0.914 |
+| 250 | 0.709 | 0.711 |
+| 375 | 0.675 | 0.646 |
+| 500 | 0.652 (best) | 0.600 |
+| 625 | 0.674 (first miss) | 0.600 |
+| 750 | 0.699 | **0.584 (best)** |
+| 875 | 0.717 | 0.589 |
+| 1000 | 0.729 | 0.601 |
+| 1125 | 0.726 | 0.597 |
+| 1250 | 0.764 | 0.606 |
+| 1375 | 0.753 | 0.610 |
+| 1500 | 0.761 | 0.616 |
+| 1625 | 0.745 | 0.617 |
+| 1750 | 0.740 | 0.621 |
+| 2000 (final) | 0.730 | 0.617 |
+
+Post-peak plateau average (steps 625-2000, 11 points): reference 0.731, SpecAugment 0.605 -- a ~0.125 gap held stable for 1375 steps, vs. the reference's steady climb. Best val_loss improved 0.652->0.584. Clean run throughout: 0 tracebacks, 0 OOM, 0 NaN, 0 skipped steps, clean `max_steps=2000 reached` exit.
+
+Result: **PASS as a val_loss result.** SpecAugment held the plateau rather than letting it climb, exactly the gate condition Opus specified. See [[DEC-011]] for the multi-agent debate over whether this val_loss evidence alone is sufficient grounds to proceed to the long run without an intermediate WER check, and why the answer was yes.
+
+Caveat (raised in the debate, not fully resolved by this record alone): VAL-023 already established that val_loss and WER can decouple in this exact model family (a checkpoint with worse val_loss had better WER). This result is evidence of a val_loss improvement; it does not by itself prove a WER improvement of the same or any particular magnitude. [[DEC-011]] documents why the debate concluded this caveat does not block proceeding.
+
+Related Records: [[VAL-023]], [[EXP-014]], [[DEC-011]]

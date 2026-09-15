@@ -33,6 +33,7 @@ Initialized: 2026-09-06. All records below were recovered from existing reposito
 - VAL-021 — experiments_full_decoder@3000 invalidated as a same-optimizer comparison point: 836.92% WER, inspected hypotheses show genuine repetition-loop collapse despite passing a NaN/Inf tensor scan — methodological correction: NaN/Inf-free weights are necessary but not sufficient evidence a checkpoint is usable
 - VAL-022 — S3-B3 production_v2 step=625 (ISS-013 fix applied, corrected init): WER 27.48%, same protocol as VAL-019 — vs. 39.92% for the prior broken-init run at a later step (843), and vs. 24.32%/20.70% for v1/v3 LoRA. Fixing init closed most of the gap; scope conclusion still needs a matched-protocol relaunch
 - VAL-023 — S3-B3 recalibrated run: val_loss and WER decouple — best-val checkpoint (step=500) scores worse WER (26.03% full-set) than the most-overfit-by-val_loss checkpoint (step=2000, 24.12% full-set). Confirmed on full 2886-sample test set (not just n=500 noise), p≈0.095. Possible calibration-drift mechanism (Guo et al.), not necessarily true generalization loss
+- VAL-024 — SpecAugment gate-test probe: flattens the full-decoder val_loss overfitting pattern (post-peak plateau 0.605 vs reference 0.731, held for 1375 steps). Clean run, 0 errors. See DEC-011 for whether this alone justified proceeding to the long run
 
 ## Decisions
 - DEC-001 — Discard ATCOSIM gender-based WER results; require a re-split for speaker independence
@@ -44,6 +45,7 @@ Initialized: 2026-09-06. All records below were recovered from existing reposito
 - DEC-007 — Drop the ambiguous "research-optimized" (3e-5) Canary-Qwen ablation from the active manuscript/research record
 - DEC-008 — Rename Canary-Qwen UWB-ATCC configs/scripts/results to canonical v1/v2/v3 scheme
 - DEC-009 — Fix fp16 AdamW degeneracy with a custom fp32 master-weight optimizer, not bf16 (7.6x slower, measured) or 16-mixed (incompatible with ModelParallelStrategy)
+- DEC-011 — Multi-agent thesis-defense debate + Opus adjudication: proceed to the long matched-protocol comparison without an intermediate WER check (SpecAugment already fixed/matched in both production configs, not a live variable); adjudicator's proposed destructive rm command NOT executed after independent verification found it targeted preserved evidence dirs
 - DEC-010 — Novelty reassessment (2 independent literature-search agents): none of the 3 original angles (adaptation-scope ladder, connector-init interaction, ATC critical-content analysis) are novel — the bridge/encoder-mismatch finding is a documented, maintainer-acknowledged NeMo pitfall with a known fix (`pretrained_weights: False` + manual state-dict load), not yet implemented. Reframe as a correctly-initialized, honestly-cited validity study, not a discovery
 
 ## Experiments

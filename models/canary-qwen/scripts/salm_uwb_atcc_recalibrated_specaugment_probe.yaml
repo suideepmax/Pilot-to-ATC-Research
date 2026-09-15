@@ -1,0 +1,149 @@
+# CHEAP GATE TEST (2026-09-14) -- per Opus verification of the matched-arm
+# plan (research_log/EXPERIMENTS.md EXP-014 follow-up): before committing
+# ~230 GPU-hours to a 9200-step matched-protocol full-decoder run whose
+# entire premise is "SpecAugment fixes the overfitting", first spend ~50
+# GPU-hours (2000 steps, ~12.5h) checking whether SpecAugment actually
+# changes the val_loss trajectory shape at all, on the EXACT SAME schedule
+# as the existing no-SpecAugment run (experiments_s3b3_recalibrated_production,
+# see research_log/VALIDATION.md VAL-023) so the two are directly comparable.
+#
+# This is a byte-for-byte copy of salm_uwb_atcc_s3b3_recalibrated.yaml with
+# ONLY perception.spec_augment added (v3's exact block). Deliberately NOT
+# also matching weight_decay to the later matched_lora/matched_full_decoder
+# arms (which Opus's review separately required to be equal to each other,
+# 1e-2 both) -- doing so here would confound this test's one purpose
+# (isolate SpecAugment's effect) with a second simultaneous change. lr=1e-5,
+# bridge_lr=5e-5, weight_decay=0.0, max_steps=2000, warmup_steps=100 all
+# UNCHANGED from the reference run.
+#
+# Decision rule (from Opus's review): if val_loss does not flatten the rise
+# that the reference run showed after ~step 625, the long 9200-step
+# matched-protocol run is very likely wasted effort and should not proceed
+# without first understanding why SpecAugment didn't help.
+
+model:
+  pretrained_llm: Qwen/Qwen3-1.7B
+  pretrained_asr: nvidia/canary-1b-flash
+  pretrained_weights: True
+  load_released_pretrained: True
+
+  freeze_params:
+    - "^perception\\.preprocessor\\..+$"
+    - "^perception\\.encoder\\..+$"
+    - "^embed_tokens\\..+$"
+    - "^llm\\.lm_head\\..+$"
+  prevent_freeze_params: []
+
+  prompt_format: qwen
+  audio_locator_tag: "<|audioplaceholder|>"
+
+  gradient_clip_val_unscaled: 1000.0
+
+  perception:
+    target: nemo.collections.speechlm2.modules.perception.AudioPerceptionModule
+    output_dim: 2048
+    modality_adapter:
+      _target_: nemo.collections.speechlm2.modules.perception.IdentityConnector
+      d_model: 1024
+    spec_augment:
+      _target_: nemo.collections.asr.modules.SpectrogramAugmentation
+      freq_masks: 2
+      time_masks: 10
+      freq_width: 27
+      time_width: 5
+
+  optimizer:
+    _target_: master_weight_adamw.MasterWeightAdamW
+    lr: 1e-5
+    bridge_lr: 5e-5
+    betas: [0.9, 0.98]
+    weight_decay: 0.0
+    eps: 1e-8
+    loss_scale: 1024.0
+
+  lr_scheduler:
+    _target_: nemo.core.optim.lr_scheduler.CosineAnnealing
+    warmup_steps: 100
+    min_lr: 1e-7
+    max_steps: ${trainer.max_steps}
+
+trainer:
+  devices: 4
+  accelerator: gpu
+  num_nodes: 1
+  precision: 16-true
+  logger: False
+  enable_checkpointing: False
+  use_distributed_sampler: False
+  max_steps: 2000
+  limit_train_batches: 1000
+  limit_val_batches: 200
+  log_every_n_steps: 50
+  num_sanity_val_steps: 1
+  accumulate_grad_batches: 8
+  strategy:
+    _target_: lightning.pytorch.strategies.ModelParallelStrategy
+    tensor_parallel_size: 1
+    data_parallel_size: 4
+
+data:
+  train_ds:
+    sample_rate: 16000
+    prompt_format: ${model.prompt_format}
+    token_equivalent_duration: 0.08
+    input_cfg:
+      - type: lhotse_as_conversation
+        cuts_path: /home/kotasthane/canary-ft/data/train_cuts_v2.jsonl.gz
+        audio_locator_tag: ${model.audio_locator_tag}
+        tags:
+          context: "Transcribe the following:"
+    seed: 1234
+    shuffle: true
+    shard_seed: "randomized"
+    num_workers: 1
+    batch_size: 1
+
+  validation_ds:
+    prompt_format: ${model.prompt_format}
+    token_equivalent_duration: 0.08
+    datasets:
+      uwb_atcc_dev:
+        input_cfg:
+          - type: lhotse_as_conversation
+            cuts_path: /home/kotasthane/canary-ft/data/dev_cuts.jsonl.gz
+            audio_locator_tag: ${model.audio_locator_tag}
+            tags:
+              context: "Transcribe the following:"
+    sample_rate: 16000
+    batch_size: 1
+    seed: 1234
+    shard_seed: 1234
+
+exp_manager:
+  exp_dir: null
+  explicit_log_dir: /home/kotasthane/canary-ft/experiments_recalibrated_specaugment_probe/
+  name: canary_uwb_atcc_recalibrated_specaugment_probe
+  create_tensorboard_logger: False
+  create_checkpoint_callback: true
+  use_datetime_version: true
+  max_time_per_run: "01:00:00:00"
+  resume_if_exists: false
+  resume_ignore_no_checkpoint: true
+  create_wandb_logger: false
+  create_early_stopping_callback: true
+  early_stopping_callback_params:
+    monitor: val_loss
+    mode: min
+    min_delta: 0.0
+    patience: 100000
+    check_finite: true
+    divergence_threshold: 50.0
+  checkpoint_callback_params:
+    filename: "{step}"
+    monitor: val_loss
+    mode: min
+    every_n_train_steps: null
+    every_n_epochs: null
+    save_top_k: 3
+    always_save_nemo: false
+    save_nemo_on_train_end: false
