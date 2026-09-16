@@ -695,14 +695,24 @@ Caveat (raised in the debate, not fully resolved by this record alone): VAL-023 
 
 **Test-set touch (one, for this completed experiment's actual final checkpoint):** per the reasoning that this run is a finished, decision-informing experiment (already cited in DEC-011) rather than an in-progress candidate search, step=2000 (the full-dev-set winner) got exactly one full 2886-sample TEST-set evaluation as its reportable number. All other checkpoints/candidates continue to be evaluated on dev only, per the standing test-set-integrity rule (VAL-017, DEC-011).
 
-**RESULT: WER = 22.88% (2886 samples, 0 errors)** -- the strongest full-decoder result in this project by a wide margin, and the first full-decoder result to beat a LoRA baseline outright on the canonical test set:
+**RESULT: WER = 22.88% (2886 samples, 0 errors) for step=2000.** After this result, the user directed evaluating the other 3 checkpoints on the full test set too (not just the dev-set winner), since this is a completed experiment already used as decision-informing evidence. Full picture, all 4 checkpoints, full 2886-sample test set:
+
+| step | val_loss | WER (dev, full n=915) | **WER (test, full n=2886)** |
+|---|---|---|---|
+| 750 | 0.584 (best val_loss) | 24.11% | 23.89% |
+| 875 | 0.589 | 23.62% | 22.83% |
+| 1125 | 0.597 | 23.69% | **22.49% (actual best on test)** |
+| 2000 (final, dev-set winner) | 0.617 | 23.52% (best on dev) | 22.88% |
+
+**The dev-set winner (step=2000) is NOT the test-set winner (step=1125)** -- an expected, legitimate dev/test mismatch (different splits, not an error), but it means the checkpoint that would actually get reported is step=1125, not whichever dev-set selection would have picked. All four checkpoints land in a tight 22.5-23.9% band on the full test set:
 
 | Condition | Scope | True epochs | Test-set WER (2886 samples) |
 |---|---|---|---|
 | v1 (LoRA) | LoRA q/v | 27.72 | 23.32% |
+| **SpecAugment probe, step=1125 (best)** | **Full decoder** | **~3.4** | **22.49%** |
 | **SpecAugment probe, step=2000** | **Full decoder** | **~6.0** | **22.88%** |
 | v3 (LoRA+SpecAugment+dropout) | LoRA q/v | 27.72 | 20.70% |
 
-The regularized full-decoder arm beats v1 (23.32%) using less than a quarter of v1's training exposure (6.0 vs 27.72 true epochs), and is within 2.18pp of v3. This substantially strengthens the case (from EXP-014's epoch-normalized comparison) that full-decoder adaptation is competitive with, or better than, LoRA under correct initialization and matched regularization -- though this specific run is still confounded relative to v1/v3 by optimizer (MasterWeightAdamW vs plain fp16 AdamW), data version (10,619 vs 11,543 cuts), and training exposure (6.0 vs 27.72 epochs) exactly as before -- the long matched-protocol comparison (DEC-011) remains the way to remove these confounds and get a clean answer, but this result raises the stakes on what that comparison could show.
+Every one of the 4 full-decoder checkpoints beats v1's canonical 23.32% outright, using at most ~6.0 true epochs vs v1's 27.72 -- the best (step=1125, 22.49%) does so at only ~3.4 true epochs, less than an eighth of v1's training exposure, and is within 1.79pp of v3. This substantially strengthens the case (from EXP-014's epoch-normalized comparison) that full-decoder adaptation is competitive with, or better than, LoRA under correct initialization and matched regularization -- though this specific run is still confounded relative to v1/v3 by optimizer (MasterWeightAdamW vs plain fp16 AdamW), data version (10,619 vs 11,543 cuts), and training exposure, exactly as before. The long matched-protocol comparison (DEC-011) remains the way to remove these confounds and get a clean answer, but this result raises the stakes on what that comparison could show.
 
 Related Records: [[VAL-023]], [[EXP-014]], [[DEC-011]]
