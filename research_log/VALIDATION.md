@@ -682,4 +682,15 @@ Result: **PASS as a val_loss result.** SpecAugment held the plateau rather than 
 
 Caveat (raised in the debate, not fully resolved by this record alone): VAL-023 already established that val_loss and WER can decouple in this exact model family (a checkpoint with worse val_loss had better WER). This result is evidence of a val_loss improvement; it does not by itself prove a WER improvement of the same or any particular magnitude. [[DEC-011]] documents why the debate concluded this caveat does not block proceeding.
 
+**UPDATE (2026-09-16) -- WER confirmed directly, not just inferred from val_loss.** Ran dev-set WER (500 samples, `eval_finetuned.py`, same forced-greedy protocol as VAL-019/022/023) on all 4 checkpoints saved during this run (top-3 by val_loss plus the final):
+
+| step | val_loss | WER (dev, n=500) |
+|---|---|---|
+| 750 | 0.584 (best val_loss) | 21.95% |
+| 875 | 0.589 | 21.99% |
+| 1125 | 0.597 | **21.10% (best WER)** |
+| 2000 (final) | 0.617 | 21.73% |
+
+WER stays in a tight 21.1-22.0% band across the entire post-peak plateau regardless of which checkpoint has the lowest val_loss -- the val_loss/WER decoupling flagged as a caveat above is visible again here (step=1125 has worse val_loss than step=750/875 but the best WER), but this time the practical stakes are low since all four points land within ~1pp of each other. This is a genuine, non-trivial WER improvement over every prior full-decoder measurement in this project (previous best was VAL-023's 24.06%) and is within ~0.4-1.3pp of v3's canonical 20.70% (LoRA+SpecAugment+dropout, full 2886-sample test set, 27.72 true epochs) -- a substantially smaller gap than any earlier full-decoder result, achieved at only ~3.4-6.0 true epochs (step 750-2000 at 331.8 opt-steps/epoch). Caveat: this is a dev-set (not test-set) measurement at n=500, and the scope/exposure/optimizer confounds from VAL-022/023 still apply relative to v3's canonical number.
+
 Related Records: [[VAL-023]], [[EXP-014]], [[DEC-011]]
