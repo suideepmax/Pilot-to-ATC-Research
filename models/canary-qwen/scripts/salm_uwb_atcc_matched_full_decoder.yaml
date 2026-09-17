@@ -52,15 +52,12 @@
 # supposed to isolate. Set to 1e-2 to match the LoRA arm -- defensible either
 # way per Opus's review, but the two arms MUST match.
 #
-# CORRECTED (2026-09-14, Opus verification review, defect #2): decoder lr
-# (1e-5) and bridge_lr (5e-5) were inherited UNCHANGED from the 2000-step
-# recalibrated config without being re-probed for this 4.6x-longer, 9200-step
-# run. Opus's review flagged this as an asymmetry against the LoRA arm's own
-# 3-point LR probe (unjustified per the LoRA config's own cited reasoning,
-# Biderman et al. arXiv:2405.09673, for tuning LR per adaptation method) --
-# probe both arms or neither. A matching decoder-lr probe (5e-6/1e-5/2e-5,
-# short runs, selected by DEV-set WER -- never test-set, see below) must be
-# run before this config's lr is trusted for the full 9200-step launch.
+# RESOLVED (2026-09-14 Opus review item, closed 2026-09-17): decoder lr was
+# re-probed (5e-6/1e-5/2e-5, 375 steps each, full 915-sample dev-set WER) --
+# see the inline comment on model.optimizer.lr below and
+# research_log/VALIDATION.md for the full probe record. bridge_lr (5e-5) was
+# left unprobed (out of scope of the mandatory probe; bridge params are a
+# small 2-param group, not the focus of this comparison).
 #
 # CORRECTED (2026-09-14, Opus verification review): checkpoint selection for
 # this run's headline WER number must use the DEV set (dev_manifest.json /
@@ -106,7 +103,10 @@ model:
 
   optimizer:
     _target_: master_weight_adamw.MasterWeightAdamW
-    lr: 1e-5  # PLACEHOLDER pending the decoder-lr probe (5e-6/1e-5/2e-5) -- see header
+    lr: 2e-5  # SELECTED (2026-09-17) via 3-point decoder-lr probe (375 steps each, full 915-sample dev WER):
+    # 5e-6 -> val_loss 0.785, WER 31.17% (500-subset); 1e-5 -> val_loss 0.678, WER 28.15% (500-subset);
+    # 2e-5 -> val_loss 0.598, WER 25.62% (full dev) -- monotonically best on both metrics, no plateau seen
+    # yet at this step count. See research_log/VALIDATION.md for the full probe record.
     bridge_lr: 5e-5
     betas: [0.9, 0.98]
     weight_decay: 1e-2
