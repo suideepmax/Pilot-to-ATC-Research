@@ -40,26 +40,19 @@
 # see that config's header for why asymmetric regularization would
 # reintroduce the exact confound this comparison is trying to eliminate).
 #
-# model.optimizer.lr below (5e-4) is a PLACEHOLDER matching v3's historical
-# value -- the actual value for the production run must come from the
-# mandatory 3-point LR probe (1e-4/3e-4/5e-4, selected by dev-set WER) run
-# before this config is launched at full scale, per Biderman et al.
-# (arXiv:2405.09673) tuning LR per-adaptation-method rather than sharing one
-# value across LoRA and full-FT. Override via
-# model.optimizer.lr=<probe-winner> at launch; do not launch with the
-# placeholder value un-overridden.
+# model.optimizer.lr below (5e-4) is CONFIRMED (2026-09-17) via the mandatory
+# 3-point LR probe (1e-4/3e-4/5e-4, 375 steps each, selected by full 915-sample
+# dev-set WER) -- see the inline comment on model.optimizer.lr below and
+# research_log/VALIDATION.md for the full probe record.
 #
-# CORRECTED (2026-09-14, Opus verification review): the matched full-decoder
-# arm (salm_uwb_atcc_matched_full_decoder.yaml) must ALSO get an equivalent
-# decoder-lr probe (5e-6/1e-5/2e-5) before launch -- Opus's review flagged
-# probing only this arm's LR as an unjustified asymmetry (self-contradicting
-# given this config's own cited reasoning above for why per-method LR tuning
-# matters). Do not launch either production run until both probes are done.
-# Checkpoint/LR selection for BOTH arms must use DEV-set WER only
-# (dev_manifest.json) -- reserve the test set for exactly one touch per arm's
-# final selected checkpoint (VAL-017 already records a prior test-as-val
-# leak in this project; do not repeat it here across 10 checkpoints x 2 arms
-# x however many LR-probe candidates).
+# RESOLVED (2026-09-14 Opus review item, closed 2026-09-17): the matched
+# full-decoder arm (salm_uwb_atcc_matched_full_decoder.yaml) got its own
+# equivalent decoder-lr probe (5e-6/1e-5/2e-5) -- both arms' probes are now
+# complete, both configs' lr fields reflect the winners. Checkpoint/LR
+# selection for BOTH arms used DEV-set WER only (dev_manifest.json); the test
+# set remains untouched pending each arm's final production checkpoint
+# selection (VAL-017 already records a prior test-as-val leak in this
+# project; do not repeat it here).
 
 model:
   pretrained_llm: Qwen/Qwen3-1.7B
@@ -102,7 +95,11 @@ model:
 
   optimizer:
     _target_: master_weight_adamw.MasterWeightAdamW
-    lr: 5e-4  # PLACEHOLDER -- override from the LR probe before production launch
+    lr: 5e-4  # SELECTED (2026-09-17) via 3-point LR probe (375 steps each, full 915-sample dev WER):
+    # 1e-4 -> val_loss 0.942, WER 37.66%; 3e-4 -> val_loss 0.765, WER 30.01%; 5e-4 -> val_loss 0.700,
+    # WER 30.04%. WER(3e-4) and WER(5e-4) are statistically indistinguishable at n=915 (0.03pp apart,
+    # well within noise) but val_loss still improving at 5e-4 with no plateau -- selected 5e-4 as the
+    # stronger optimization signal. See research_log/VALIDATION.md for the full probe record.
     bridge_lr: 5e-5
     betas: [0.9, 0.98]
     weight_decay: 1e-2

@@ -716,3 +716,35 @@ Caveat (raised in the debate, not fully resolved by this record alone): VAL-023 
 Every one of the 4 full-decoder checkpoints beats v1's canonical 23.32% outright, using at most ~6.0 true epochs vs v1's 27.72 -- the best (step=1125, 22.49%) does so at only ~3.4 true epochs, less than an eighth of v1's training exposure, and is within 1.79pp of v3. This substantially strengthens the case (from EXP-014's epoch-normalized comparison) that full-decoder adaptation is competitive with, or better than, LoRA under correct initialization and matched regularization -- though this specific run is still confounded relative to v1/v3 by optimizer (MasterWeightAdamW vs plain fp16 AdamW), data version (10,619 vs 11,543 cuts), and training exposure, exactly as before. The long matched-protocol comparison (DEC-011) remains the way to remove these confounds and get a clean answer, but this result raises the stakes on what that comparison could show.
 
 Related Records: [[VAL-023]], [[EXP-014]], [[DEC-011]]
+
+---
+
+## VAL-025 — Matched-protocol LR probes: full-decoder lr=2e-5, LoRA lr=5e-4 selected
+
+Date: 2026-09-17
+Status: COMPLETE
+
+Objective: Select the production decoder-LR for each arm of the matched-protocol comparison ([[DEC-011]]), per the Opus-review-mandated probe (both arms must be probed, not just one, per Biderman et al. arXiv:2405.09673 on per-adaptation-method LR tuning).
+
+Inputs / Configuration: `salm_uwb_atcc_matched_full_decoder.yaml` / `salm_uwb_atcc_matched_lora.yaml`, each run for 375 steps (warmup_steps=20) at 3 candidate LRs, 4 GPUs (FSDP2, data_parallel_size=4), `train_cuts_v2.jsonl.gz`, spec_augment enabled, weight_decay=1e-2 in both arms. Checkpoint selected: `step=375-last.ckpt` for each probe.
+
+Procedure: For each candidate LR, ran the matched-protocol config truncated to max_steps=375, monitored val_loss at steps 125/250/375, then evaluated the step=375 checkpoint's WER on the FULL 915-sample dev set (`dev_manifest.json`, no `--max-samples` cap — corrected mid-session after an initial run mistakenly used a 500-sample subset for the first two full-decoder probes; those two were not re-run on the full set, see Remaining Risks). Selection criterion: dev-set WER, never test-set (per VAL-017/DEC-011 leakage-avoidance).
+
+Actual Result:
+
+| Arm | LR | val_loss (step 375) | WER (dev) |
+|---|---|---|---|
+| Full-decoder | 5e-6 | 0.785 | 31.17% (500-subset) |
+| Full-decoder | 1e-5 | 0.678 | 28.15% (500-subset) |
+| Full-decoder | **2e-5 (selected)** | **0.598** | **25.62% (full n=915)** |
+| LoRA | 1e-4 | 0.942 | 37.66% (full n=915) |
+| LoRA | 3e-4 | 0.765 | 30.01% (full n=915) |
+| LoRA | **5e-4 (selected)** | **0.700** | **30.04% (full n=915)** |
+
+Evidence: `experiments_lr_probe_fd_{5e-6,1e-5,2e-5}/`, `experiments_lr_probe_lora_{1e-4,3e-4,5e-4}/` (checkpoints + logs), eval logs/JSON in session scratchpad (`eval_probe_fd_2e-5_FULL.{log,json}`, `eval_probe_lora_{1e-4,3e-4,5e-4}_FULL.{log,json}`). All 6 training runs confirmed clean exit (`Trainer.fit stopped: max_steps=375 reached`, 0 GPU processes remaining, no Traceback/Error/OOM/NaN in logs beyond known-benign NeMo startup warnings).
+
+Result: PASS — full-decoder LR is monotonic and clearly best at 2e-5 (highest LR tested; no plateau observed, higher values not tested since this ceiling was not the object of the probe). LoRA is a closer call: 5e-4 has meaningfully better val_loss than 3e-4 (0.700 vs 0.765) but WER is statistically indistinguishable between the two (30.04% vs 30.01%, 0.03pp apart — well within noise at n=915, ~±3pp 95% CI). Selected 5e-4 on the strength of the val_loss trend (still improving, no sign of plateau) since it does not cost anything on WER.
+
+Remaining Risks: (1) The two lowest full-decoder probes (5e-6, 1e-5) only have 500-sample dev WER, not the full 915 — inconsistent evaluation resolution against the 2e-5 winner and the LoRA probes. Does not change the full-decoder LR decision (2e-5 wins on val_loss regardless, by a wide margin), so not re-run. (2) LoRA's 3e-4 vs 5e-4 WER tie means the choice partially rests on val_loss trend rather than a WER-significant difference — if the production LoRA run underperforms, 3e-4 remains a plausible alternative not ruled out by this probe. (3) Neither arm's probe tested LRs beyond its selected value (full-decoder could plausibly benefit from >2e-5, LoRA from >5e-4) — the probe was scoped to 3 points per arm per the original plan, not an exhaustive sweep.
+
+Related Records: [[DEC-011]], [[VAL-023]], [[EXP-014]]
