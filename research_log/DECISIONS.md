@@ -263,3 +263,27 @@ Decision: Proceed with the mandatory LR probes (both arms, per Opus's earlier co
 Consequences: `salm_uwb_atcc_matched_full_decoder.yaml`'s checkpoint resolution is coarser than originally planned (4 points across the run instead of 10) -- sufficient to see the qualitative WER-vs-epoch trend, not for fine-grained checkpoint selection within the run. The LoRA arm keeps its original 10-checkpoint density (much smaller per-checkpoint footprint, ~5.7GB).
 
 Related Records: [[VAL-024]], [[VAL-023]], [[EXP-014]], [[DEC-010]]
+
+## DEC-012 — Truncate LoRA production run to 3700 steps (~11.15 true epochs); target venue clarified as ICASSP 2027
+
+Date: 2026-09-17
+Status: DECIDED, executed with explicit user approval
+
+Question: The user asked to review the novelty question given an approaching paper deadline. Investigating this surfaced two corrections that changed the plan: (1) the target venue is NOT IEEE SLT 2026 -- [[DEC-005]] already records this manuscript was rejected by SLT 2026 reviewers; the user confirmed the actual target is ICASSP 2027 (full papers due 2026-09-23, effectively 2026-09-24 08:00 EDT under AoE); (2) DEC-011's plan (both arms trained to 9200 steps = 27.72 true epochs, sequential on 4 shared GPUs) leaves the LoRA arm finishing ~2026-09-21 20:45, under 24-27h before even the corrected deadline, with no slack for evaluation, error analysis, or writing.
+
+Context: An Opus-model research agent (web-search-capable) was asked to reassess novelty given all evidence since DEC-010 (EXP-014, VAL-023/024/025) and the deadline math. It found: (a) a closely competing paper (AIAA SciTech 2026, "Efficient Domain Adaptation of Whisper for ATC...") independently covers LoRA-vs-full-FT on ATC, a critical-content metric, and a full-FT data-efficiency claim -- must be cited/positioned against, full text not yet obtained (403 on first attempt); (b) the project's strongest, most distinctive result is actually VAL-023/024's checkpoint-selection-failure finding (val_loss-based selection picks the wrong checkpoint; 500 vs 915 vs test-set rankings disagree), not the raw LoRA-vs-full-FT comparison, which is a directionally-expected result per existing LoRA literature; (c) the already-complete evidence (EXP-014, VAL-023, VAL-024) already supports a submittable claim without waiting for the matched-protocol run to fully complete; (d) the informative region for the LoRA arm is 3-11 true epochs (where the full-decoder arm's best SpecAugment-probe result, 22.49% WER, was measured at ~3.4 epochs), not LoRA's already-known 27.7-epoch endpoint (v1/v3: 23.32%/20.70%) -- the last ~17 epochs of a full 9200-step LoRA run would be the least informative GPU-hours available given the deadline.
+
+Options Considered:
+1. Keep DEC-011's original plan (both arms to 9200 steps). Rejected: leaves near-zero slack before the (even corrected) deadline for evaluation/writing, and spends the majority of LoRA's remaining runtime on an already-known endpoint.
+2. Truncate LoRA to ~3000-3700 steps, re-anneal the cosine schedule to the new max_steps, and start writing now using already-complete evidence, treating the (still-running) full-decoder arm and (about-to-launch, truncated) LoRA arm as confirmation/strengthening evidence added as it becomes available. Selected.
+3. Kill the in-progress full-decoder run early. Rejected: it is on track to finish 2026-09-19, well within the corrected deadline, and is the single most valuable remaining artifact (only source of the true epoch-normalized full-decoder confirmation at production LR/scale); no reason to cut it short.
+
+Decision: Truncate `salm_uwb_atcc_matched_lora.yaml`'s `trainer.max_steps` from 9200 to 3700 (~11.15 true epochs at this recipe's 331.8-opt-step/true-epoch rate), re-anneal `lr_scheduler.warmup_steps` from 460 to 185 (same 5% fraction), and reduce `checkpoint_callback_params.every_n_train_steps` from 920 to 925 (4 checkpoints across the shorter run, matching the full-decoder arm's resolution). Let the full-decoder run finish at its original 9200-step target. Start writing the paper now using already-complete evidence (EXP-014, VAL-023, VAL-024), incorporating the matched-protocol results as they land.
+
+Reason: Under the corrected ICASSP 2027 deadline, GPU-hours are the scarce resource, not additional confirmation of an already-known LoRA endpoint. The truncated LoRA run's data lands in the 3-11 true-epoch range where the comparison against the full-decoder arm's best result is actually informative, at roughly 40% of the wall-clock cost of the original plan.
+
+Consequences: This is a deliberate deviation from DEC-011's "both arms trained to the same 9200-step / 27.72-true-epoch budget" symmetry -- the matched-protocol comparison's LoRA arm will only be directly comparable to the full-decoder arm's early/mid checkpoints (steps 925/1850/2775/3700 vs the full-decoder arm's 2300/4600/6900/9200), not its final one. This must be disclosed in the paper as an explicit limitation, not silently normalized away. The full-decoder arm remains at its original, DEC-011-approved 9200-step target -- only the LoRA arm is truncated.
+
+Rejected Alternatives: Running LoRA to completion at 9200 steps (see Options Considered #1); killing the full-decoder run early (see Options Considered #3).
+
+Related Records: [[DEC-011]], [[DEC-005]], [[DEC-010]], [[EXP-014]], [[VAL-023]], [[VAL-024]], [[VAL-025]]

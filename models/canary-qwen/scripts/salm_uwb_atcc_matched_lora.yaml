@@ -108,7 +108,7 @@ model:
 
   lr_scheduler:
     _target_: nemo.core.optim.lr_scheduler.CosineAnnealing
-    warmup_steps: 460
+    warmup_steps: 185  # 5% of max_steps=3700, same fraction as the original 460/9200 -- see DEC-012
     min_lr: 1e-7
     max_steps: ${trainer.max_steps}
 
@@ -120,7 +120,15 @@ trainer:
   logger: False
   enable_checkpointing: False
   use_distributed_sampler: False
-  max_steps: 9200
+  # max_steps 9200 -> 3700 (2026-09-17, DEC-012, ICASSP 2027 deadline pressure):
+  # truncated from the original DEC-011 matched-protocol plan (both arms to 9200
+  # steps = 27.72 true epochs). 3700 steps = ~11.15 true epochs at this recipe's
+  # 331.8-opt-step/epoch rate -- placed in the informative 3-11 true-epoch range
+  # where the full-decoder arm's SpecAugment-probe result (22.49% WER at ~3.4
+  # epochs) was measured, rather than at LoRA's already-known 27.7-epoch
+  # endpoint (v1/v3: 23.32%/20.70%). See DEC-012 for full rationale (explicit
+  # user approval, deadline math, Opus-agent recommendation).
+  max_steps: 3700
   limit_train_batches: 1000
   limit_val_batches: 200
   log_every_n_steps: 50
@@ -187,7 +195,7 @@ exp_manager:
     filename: "{step}"
     monitor: val_loss
     mode: min
-    every_n_train_steps: 920
+    every_n_train_steps: 925  # 3700/4 (DEC-012 truncation) -- matches full-decoder arm's 4-checkpoint resolution
     every_n_epochs: null
     save_top_k: -1
     always_save_nemo: false
