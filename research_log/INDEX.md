@@ -47,6 +47,7 @@ Initialized: 2026-09-06. All records below were recovered from existing reposito
 - DEC-008 — Rename Canary-Qwen UWB-ATCC configs/scripts/results to canonical v1/v2/v3 scheme
 - DEC-009 — Fix fp16 AdamW degeneracy with a custom fp32 master-weight optimizer, not bf16 (7.6x slower, measured) or 16-mixed (incompatible with ModelParallelStrategy)
 - DEC-011 — Multi-agent thesis-defense debate + Opus adjudication: proceed to the long matched-protocol comparison without an intermediate WER check (SpecAugment already fixed/matched in both production configs, not a live variable); adjudicator's proposed destructive rm command NOT executed after independent verification found it targeted preserved evidence dirs
+- DEC-012 — Target venue clarified as ICASSP 2027 (not SLT 2026, already rejected per DEC-005); LoRA production run truncated 9200->3700 steps (~11.15 true epochs) to fit deadline; competing AIAA SciTech 2026 ATC paper found, must be cited; already-complete evidence (EXP-014/VAL-023/024) deemed sufficient to start writing now without waiting for matched-protocol completion
 - DEC-010 — Novelty reassessment (2 independent literature-search agents): none of the 3 original angles (adaptation-scope ladder, connector-init interaction, ATC critical-content analysis) are novel — the bridge/encoder-mismatch finding is a documented, maintainer-acknowledged NeMo pitfall with a known fix (`pretrained_weights: False` + manual state-dict load), not yet implemented. Reframe as a correctly-initialized, honestly-cited validity study, not a discovery
 
 ## Experiments
