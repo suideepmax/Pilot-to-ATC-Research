@@ -363,3 +363,32 @@ Implementation, verified step by step before trusting it (not assumed):
 Status: RESOLVED for the S3-B3 track going forward. v1/v2/v3's historical results are unaffected (separate config files, this flag was never applied to them, and their own results stand as originally reported under the composed-from-scratch initialization).
 
 Related Records: [[DEC-010]]
+
+**UPDATE (2026-09-18) -- reproduced again in production, and now has a verified mitigation.** The exact same `EarlyStopping`/`_improvement_message` cross-device crash under `ModelParallelStrategy` resume, predicted by this record's original description, was hit again resuming the matched-protocol full-decoder production run (see [[ISS-016]] for the full incident, which also uncovered two OTHER resume-path bugs that had to be worked around first before this one was even reachable). Mitigation: launch the resume with `exp_manager.create_early_stopping_callback=false` -- disabling the callback entirely sidesteps the bug rather than fixing Lightning's `best_score` device-placement handling. Candidate direction (b) from this record's original Mitigation section is now answered: this does NOT require reaching a second validation on a long fresh run -- it is resume-specific, reproduced on the very first post-resume validation once validation-on-resume was re-enabled.
+
+Status: OPEN upstream (Lightning's bug itself was not patched), but WORKAROUND VERIFIED for this project's use case (production resume completed cleanly to full target step count with the callback disabled).
+
+Related Records: [[ISS-016]]
+
+## ISS-016 — Resuming `salm_train_stable.py` from a checkpoint requires three non-obvious overrides; without them, resume crashes on the first post-resume epoch boundary
+
+Date: 2026-09-18
+Status: RESOLVED (workaround identified and verified; root causes not patched in the training script itself)
+
+Description: The matched full-decoder production run (`salm_uwb_atcc_matched_full_decoder`, 9200-step target) crashed at step ~5669 due to an unrelated operational error (a DataLoader worker process for the validation set was killed by mistake, mistaken for a stray/orphaned process during an unrelated cleanup request). The last good checkpoint (`step=5500-last.ckpt`) was fully intact, but resuming from it (`exp_manager.resume_if_exists=true`) failed three times in a row, each on a different bug, before succeeding:
+
+1. **EarlyStopping callback crashes if validation is skipped on resume.** NeMo's `exp_manager` defaults `disable_validation_on_resume=True`, which skips validation for the first post-resume epoch. The production config has `create_early_stopping_callback: true` (monitor=`val_loss`, patience=100000, purely a divergence tripwire, never meant to actually fire). Lightning's `EarlyStopping.on_train_epoch_end` unconditionally checks the monitored metric at every epoch end regardless of `disable_validation_on_resume`, and raised `RuntimeError: Early stopping conditioned on metric 'val_loss' which is not available` since no validation had run to produce it.
+2. **Hydra override syntax for `disable_validation_on_resume`.** Since this key does not appear as a settable field in the config's structured schema by default in this project's YAMLs, `exp_manager.disable_validation_on_resume=false` fails with `Could not override ... Key 'disable_validation_on_resume' is not in struct` -- must be added via `+exp_manager.disable_validation_on_resume=false` (Hydra's "append new key" syntax), not a plain override.
+3. **A genuine PyTorch Lightning bug**: even with validation re-enabled on resume (val_loss computed successfully, e.g. 0.5437 at step 5500), the EarlyStopping callback's own improvement-message formatting (`_improvement_message`, computing `self.best_score - current`) crashed with `RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cuda:2!` -- a cross-device tensor bug in how `best_score` gets restored across FSDP2/`ModelParallelStrategy` ranks after loading a checkpoint. This only manifests on resume with validation enabled; the same callback ran without incident for the first 5500 steps of the original (non-resumed) run.
+
+Working fix (used for all subsequent resumes of this run): launch with `exp_manager.resume_if_exists=true exp_manager.create_early_stopping_callback=false` -- disabling the EarlyStopping callback entirely removes every crash path above, since none of it depends on `disable_validation_on_resume` once the callback that reads `val_loss` at epoch-end is gone. This is safe here because the callback's `patience=100000`/`divergence_threshold=50.0` meant it was never going to trigger real early stopping in the first place; it was a passive safety net, not load-bearing training logic.
+
+A fourth, unrelated CUDA OOM (`Tried to allocate 594.00 MiB ... 582.88 MiB is free`) occurred ~51 steps into the fourth resume attempt (the one that still had `disable_validation_on_resume=false`), most likely because the extra validation pass right before resuming training left additional memory reserved/fragmented, right at this setup's already-tight ~11GB/GPU margin. Dropping the now-unnecessary `disable_validation_on_resume` override (validation is not needed on resume once EarlyStopping is disabled) resolved this too -- the fifth attempt resumed cleanly and ran to completion (step 9200) with no further issues.
+
+Impact: None on the final result -- the checkpoint at the crash point was never corrupted, and total lost compute across the whole incident was ~169 steps (~7.5 min) of retraining plus the resume attempts themselves. Not a correctness or data-integrity issue; a pure availability/tooling issue that cost operator time.
+
+Mitigation: For any future resume of a run using this project's `salm_train_stable.py` + `create_early_stopping_callback: true` config pattern, launch with `exp_manager.resume_if_exists=true exp_manager.create_early_stopping_callback=false` from the start -- do not attempt `disable_validation_on_resume` overrides, which are unnecessary once early stopping is disabled and add both a Hydra-syntax pitfall and extra OOM risk.
+
+Resolution: Workaround verified end-to-end (full-decoder arm resumed from step 5500 and completed cleanly to step 9200 with no further errors). The underlying Lightning cross-device bug in `EarlyStopping._improvement_message` under FSDP2 resume was not patched or reported upstream -- only avoided by disabling the callback.
+
+Related Records: [[EXP-015]], [[DEC-011]], [[DEC-012]], [[ISS-015]]
