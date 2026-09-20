@@ -139,3 +139,28 @@ Conclusion: The v1/v3 regularization-only and v2 encoder-unfreeze-only diffs are
 Limitations: Did not execute the wrapper scripts or Hydra config resolution live (would require either GPU launch or a separate cheap Hydra-compose smoke test outside this audit's read-only scope) — the missing-file conclusion is based on direct filesystem inspection (`test -e`, `ls -la`) plus reading `hydra_runner`'s single-directory resolution contract in `salm_train.py`, which is standard, well-documented Hydra behavior, not empirically re-executed here.
 
 Related Records: [[ISS-007]], [[ISS-009]], [[ISS-010]], [[DEC-008]], [[VAL-012]]
+
+## AUD-006 — Dev-set/manuscript-train-set overlap: quantified, 100% of dev_cuts.jsonl.gz was manuscript-era (v1/v2/v3) training data
+
+Date: 2026-09-20
+Status: COMPLETE
+
+Objective: Answer directly, with verified evidence rather than inference from prior disclosures, whether `dev_cuts.jsonl.gz` (the 915-sample dev split used throughout this session for checkpoint selection in the S3-B3/matched-protocol full-decoder and LoRA runs) was ever used as training data for the original manuscript's models (v1/v2/v3, the ones behind the rejected SLT 2026 submission).
+
+Scope: `/home/kotasthane/canary-ft/data/{dev_cuts,train_cuts,train_cuts_v2,test_cuts}.jsonl.gz`. Read-only; no files modified.
+
+Methodology: Loaded each lhotse cut manifest directly (`gzip`+`json`, not inferred from filenames or dates) and compared cut `id` fields (verified these are genuine unique per-utterance IDs, e.g. `uwb-atcc_TWR-hYWS7s_000000_000600_PI` — session+timerange+speaker-role, not a degenerate/duplicate key) via Python set intersection.
+
+Findings:
+1. **dev_cuts.jsonl.gz (n=915) ∩ train_cuts.jsonl.gz (n=11,543, the ORIGINAL manuscript-era train set used by v1/v2/v3) = 915/915 (100%)**. Every single dev-set utterance was part of the training data behind the original submitted manuscript's models.
+2. **dev_cuts.jsonl.gz ∩ train_cuts_v2.jsonl.gz (n=10,619, the corrected train set used by every run this session — S3-B3, SpecAugment probes, matched-protocol full-decoder/LoRA arms) = 0**. Confirmed clean: this session's models never trained on dev data.
+3. **dev_cuts.jsonl.gz ∩ test_cuts.jsonl.gz (n=2,886) = 0**. Dev and test remain disjoint, as expected.
+4. File timestamps corroborate the mechanism already described in [[VAL-017]]'s disclosure: `train_cuts.jsonl.gz` (2026-03-26, pre-dates this project's later fixes) vs. `dev_cuts.jsonl.gz` and `train_cuts_v2.jsonl.gz` (both 2026-09-10, same day, consistent with `make_dev_split.py` carving the dev split OUT of the original train set to produce the corrected training set in one operation).
+
+Conclusion: The dev set is legitimately held-out ONLY relative to this session's own new models (full-decoder, LoRA matched-protocol arms) — it is NOT held-out relative to v1/v2/v3. This does not retroactively invalidate v1/v2/v3's own previously-reported numbers (those were always evaluated on `test_cuts.jsonl.gz`, which is clean and disjoint from both train sets), but it means **any WER comparison between v1/v2/v3 and this session's new models that uses the dev set would unfairly favor v1/v2/v3**, since those models saw that exact data during training and the new models never did. This is consistent with, and now directly verifies, why every headline number in this session's matched-protocol comparison ([[EXP-015]]) was deliberately drawn from the test set (18.73% full-decoder, 20.62% LoRA-truncated) rather than the dev set — dev was correctly used only for within-arm checkpoint selection among this session's own models, never for cross-generation (old vs. new model) comparison.
+
+Evidence: Direct Python set-intersection check over all four manifest files' `id` fields (session script, not saved as a permanent file — reproducible via the methodology described above).
+
+Limitations: Did not check whether `test_cuts.jsonl.gz` itself might share sessions/speakers (not just exact utterance IDs) with `train_cuts.jsonl.gz` or `train_cuts_v2.jsonl.gz` — this audit checked exact-utterance overlap only, per the standing principle (research_log conventions) of keeping duplicate-utterance and speaker/session-overlap questions distinct rather than inferring one from the other. A session-level overlap audit, if needed, would require parsing the `recording`/session-id fields, not yet done here.
+
+Related Records: [[VAL-017]], [[DEC-011]], [[EXP-015]], [[VAL-025]]
