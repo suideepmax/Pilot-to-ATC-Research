@@ -424,21 +424,45 @@ Next Action: Present this tradeoff to the user before launching the matched-prot
 
 Related Records: [[VAL-019]], [[VAL-022]], [[VAL-023]], [[DEC-010]]
 
-## EXP-015 — Matched-protocol production runs: full-decoder complete (9200 steps), LoRA running (truncated to 3700 steps per DEC-012)
+## EXP-015 — Matched-protocol production runs: full-decoder complete (9200 steps), LoRA-truncated complete (3700 steps) and evaluated, LoRA-full (9200 steps) running
 
-Date: 2026-09-17 to 2026-09-19 (ongoing)
-Status: full-decoder arm COMPLETE; LoRA arm RUNNING
+Date: 2026-09-17 to 2026-09-21 (ongoing)
+Status: full-decoder arm COMPLETE + EVALUATED; LoRA-truncated arm COMPLETE + EVALUATED; LoRA-full arm RUNNING
 
 Objective: Execute DEC-011's decided matched-protocol comparison (full-decoder vs LoRA, identical init/optimizer/data/schedule/regularization, only adaptation scope differing) using the LR values selected in [[VAL-025]] (full-decoder lr=2e-5, LoRA lr=5e-4).
 
 Configuration: `salm_uwb_atcc_matched_full_decoder.yaml` (max_steps=9200, full 27.72 true epochs) and `salm_uwb_atcc_matched_lora.yaml` (max_steps=3700, truncated to ~11.15 true epochs per [[DEC-012]] for the ICASSP 2027 deadline). Both: 4 GPUs, FSDP2 (`ModelParallelStrategy`, `data_parallel_size=4`), `train_cuts_v2.jsonl.gz`, spec_augment enabled, weight_decay=1e-2, `load_released_pretrained=True`.
 
-Full-decoder arm result: Launched 2026-09-17 00:22. Interrupted once at step ~5669 by an unrelated operational error (see [[ISS-016]]) with the last-good checkpoint (step=5500) intact; resumed and completed cleanly to step 9200 on 2026-09-19 10:03 after working around three resume-path bugs (ISS-016). Checkpoints saved at steps 2300/4600/6900/9200 (`save_top_k=-1`, all preserved). val_loss trajectory across the full run: step 750 (2.26 true epochs) = 0.562 (minimum), drifting up and plateauing in the 0.56-0.65 band through step 9200 (final = 0.623, best-observed-post-resume = 0.621 at step 6900) -- consistent with the val_loss/WER decoupling already established in [[VAL-023]]/[[VAL-024]]; WER ranking across these 4 checkpoints is NOT yet known and must come from evaluation, not from this val_loss trajectory.
+Full-decoder arm training: Launched 2026-09-17 00:22. Interrupted once at step ~5669 by an unrelated operational error (see [[ISS-016]]) with the last-good checkpoint (step=5500) intact; resumed and completed cleanly to step 9200 on 2026-09-19 10:03 after working around three resume-path bugs (ISS-016). Checkpoints saved at steps 2300/4600/6900/9200 (`save_top_k=-1`, all preserved). val_loss trajectory: step 750 (2.26 true epochs) = 0.562 (minimum), drifting up and plateauing in the 0.56-0.65 band through step 9200 (final = 0.623, best-observed-post-resume = 0.621 at step 6900).
 
-LoRA arm status (as of 2026-09-19 11:51): Launched 2026-09-19 10:04 immediately after full-decoder's GPUs freed. Running cleanly, step 375/3700 (10.1%) at last check, val_loss still improving (125=1.067, 250=0.805, 375=0.723, no plateau yet, unlike the full-decoder arm). No errors. ETA per observed ~16s/step rate: ~2026-09-20 02:40 EDT.
+LoRA-truncated arm training: Launched 2026-09-19 10:04 immediately after full-decoder's GPUs freed. Completed cleanly to step 3700 on 2026-09-20 02:31, ~16s/step (29.5% faster per step than full-decoder's ~22.7s/step, measured directly from checkpoint timestamps). Checkpoints at steps 925/1850/2775/3700. val_loss trajectory: 925=0.621, 1850=0.595 (minimum), 2775=0.603, 3700=0.610 -- a fully re-annealed, converged short schedule (cosine LR reached its floor at step 3700), not a mid-trajectory snapshot of a longer run.
 
-Evaluation plan (not yet executed, deliberately deferred): both arms' checkpoints will be evaluated together on the full 915-sample dev set once the LoRA arm completes (explicit user decision: do not interrupt the LoRA run to free a GPU for early full-decoder evaluation, given the tight VRAM margin that already caused one OOM during this run's resume -- see [[ISS-016]]). Each arm's WER-best checkpoint will then get exactly one touch of the held-out test set for the final headline comparison, per the standing leakage-avoidance principle ([[VAL-017]], [[DEC-011]]).
+**Dev-set WER (full 915-sample set, all 8 checkpoints, `eval_finetuned.py --base composed`, no `--max-samples` cap):**
 
-Next Action: Evaluate all 8 checkpoints (4 full-decoder + 4 LoRA) on the full dev set once LoRA reaches step 3700; select each arm's winner; touch test set once per arm; write up the matched-protocol result.
+| Arm | Step | True epochs | val_loss | Dev WER |
+|---|---|---|---|---|
+| Full-decoder | 2300 | ~6.93 | -- | 18.80% |
+| Full-decoder | 4600 | ~13.86 | -- | 18.32% |
+| Full-decoder | 6900 | ~20.79 | 0.621 (best) | 18.87% |
+| Full-decoder | **9200** | **27.72** | 0.623 | **18.19% (arm winner)** |
+| LoRA-truncated | 925 | ~2.79 | 0.621 | 25.20% |
+| LoRA-truncated | 1850 | ~5.58 | 0.595 (best) | 20.59% |
+| LoRA-truncated | 2775 | ~8.36 | 0.603 | 20.00% |
+| LoRA-truncated | **3700** | **~11.15** | 0.610 | **19.83% (arm winner)** |
 
-Related Records: [[VAL-025]], [[DEC-011]], [[DEC-012]], [[ISS-016]], [[EXP-014]]
+Both arms' final (highest-exposure) checkpoint won on dev WER, despite val_loss plateauing/drifting earlier in both cases -- consistent with the val_loss/WER decoupling established in [[VAL-023]]/[[VAL-024]]. Full-decoder's checkpoint-to-checkpoint WER is NOT monotonic (18.80/18.32/18.87/18.19), a ~0.68pp spread that is a meaningful fraction of the eventual arm-to-arm gap -- disclose this, do not present the comparison as noise-free.
+
+**Test-set WER (full 2,886-sample set, ONE touch per arm's dev-selected winner, per [[VAL-017]]/[[DEC-011]] leakage-avoidance):**
+
+| Arm | Checkpoint | True epochs | Test WER |
+|---|---|---|---|
+| Full-decoder | step=9200 | 27.72 | **18.73%** |
+| LoRA-truncated | step=3700 | ~11.15 | **20.62%** |
+
+Full-decoder beats LoRA-truncated by 1.89pp on the held-out test set under fully matched conditions -- the clean, confound-controlled result [[DEC-011]] was designed to produce. Per explicit user decision (2026-09-20), the truncated-LoRA test touch was NOT discarded even though a full-length LoRA run was subsequently also launched (see below) -- both are being kept and reported as separate, distinctly-configured experimental arms, each with its own single test touch, rather than treating the truncated run as superseded.
+
+LoRA-full arm (reversing DEC-012's truncation, see [[DEC-013]]): Launched 2026-09-20 14:14 (`experiments_matched_lora_full9200/`, separate log dir from the truncated run, no collision) with two safeguards added after two-agent pre-launch review: `exp_manager.checkpoint_callback_params.every_n_train_steps=1150` (aligns checkpoints with full-decoder's own 2300/4600/6900/9200 at steps 2300/4600/6900/9200, for a genuinely step-matched learning curve between arms) and `exp_manager.create_early_stopping_callback=false` (proactively avoids the ISS-015/ISS-016 EarlyStopping cross-device crash in case this run ever needs a resume). Status as of 2026-09-21: running cleanly, step 4600/9200 (50%), val_loss 1150=0.595 (best), 2300=0.606, 3450=0.636, 4600=0.638 -- same plateau-after-early-minimum pattern as both other arms. No errors. ETA ~2026-09-22 07:00 EDT per observed ~16s/step rate, well inside the actual ICASSP deadline (2026-09-23 submission, effectively 2026-09-24 08:00 EDT under AoE).
+
+Next Action: Let LoRA-full run to step 9200 (or the DEC-013 bailout point if the deadline forces an early stop); evaluate all its checkpoints on the full dev set; touch test set once for its winner; report all three arms (full-decoder, LoRA-truncated, LoRA-full) in the manuscript with their distinct true-epoch exposures made explicit.
+
+Related Records: [[VAL-025]], [[DEC-011]], [[DEC-012]], [[DEC-013]], [[ISS-016]], [[EXP-014]], [[AUD-006]]

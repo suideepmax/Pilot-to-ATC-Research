@@ -287,3 +287,25 @@ Consequences: This is a deliberate deviation from DEC-011's "both arms trained t
 Rejected Alternatives: Running LoRA to completion at 9200 steps (see Options Considered #1); killing the full-decoder run early (see Options Considered #3).
 
 Related Records: [[DEC-011]], [[DEC-005]], [[DEC-010]], [[EXP-014]], [[VAL-023]], [[VAL-024]], [[VAL-025]]
+
+## DEC-013 — Reverse DEC-012's LoRA truncation: also run LoRA to the full 9200 steps, keeping the truncated result as a separate reported arm
+
+Date: 2026-09-20
+Status: DECIDED, executed
+
+Question: With full-decoder (9200 steps, 18.73% test WER) and LoRA-truncated (3700 steps, 20.62% test WER) both complete, the user asked to also run LoRA to its full original 9200-step target, specifically to see the fully exposure-matched comparison and whether LoRA trains faster per step than full-decoder. Given DEC-012 truncated LoRA specifically to save time against the ICASSP deadline, is reversing that decision now still safe and worthwhile?
+
+Context: Per explicit user instruction, two specialist agents reviewed the launch before it happened (ml-engineer for config/launch-command correctness, systems-architect for timeline/scope judgment), run in parallel.
+
+- **ml-engineer**: verdict NO-GO at the moment of review (GPUs 0/1 were still occupied by the two one-time test-set evals for full-decoder/LoRA-truncated), GO once those cleared. Confirmed all Hydra CLI overrides target valid structured keys (no repeat of ISS-016's `+`-prefix pitfall), disk headroom sufficient (~42GB remaining after the new run's ~63GB of checkpoints), GPU memory margin acceptable (LoRA's per-checkpoint footprint is ~4x smaller than full-decoder's, and the known OOM in ISS-016 was resume-specific, not a fresh-launch risk), and the EarlyStopping callback poses no risk on a fresh (non-resumed) run.
+- **systems-architect**: corrected several premises in the original framing -- (1) full-decoder's own dev-WER checkpoints are NOT monotonic (0.68pp spread, ~40% of the claimed arm-to-arm gap), so the headline gap should be presented with that noise disclosed; (2) LoRA-truncated's cosine schedule fully re-annealed at step 3700, so it is a converged short run, not a mid-trajectory point on a 27.7-epoch schedule -- a stronger justification for the new run than originally stated; (3) the per-step speed question (does LoRA train faster?) is already answered by measured checkpoint timestamps (16.0s/step vs full-decoder's 22.7s/step) and does not require running 9200 more steps to confirm; (4) the actual deadline has more slack than assumed (ICASSP 2027 submission 2026-09-23, effective AoE cutoff 2026-09-24 08:00 EDT, not 09-23 as stated informally) -- recommended GO with two specific safeguards.
+
+The systems-architect also flagged that the LoRA-truncated arm's one-time test-set touch (already in progress when this review started) risked becoming an orphaned/wasted touch if the eventual paper only reports the full-9200 LoRA number. Put to the user directly: keep both truncated and full results as two separate, independently-reported experimental arms (user's choice), rather than treat one as superseding the other.
+
+Decision: Launch LoRA to the full 9200 steps in a separate log directory (`experiments_matched_lora_full9200/`, no collision with the truncated run's artifacts), with two safeguards adopted from the systems-architect's review: (a) `checkpoint_callback_params.every_n_train_steps` changed from the truncated run's 925 to 1150, so checkpoints land on 1150/2300/3450/4600/5750/6900/8050/9200 -- four of these (2300/4600/6900/9200) exactly match full-decoder's own checkpoint steps, producing a genuinely step-matched learning curve between arms; (b) `create_early_stopping_callback=false` set proactively (not waiting to discover the ISS-015/ISS-016 crash again if this run ever needs a resume, since the callback is a passive divergence tripwire with no cost to disabling). Both LoRA arms (truncated and full) are reported as distinct experimental configurations, each with its own single test-set touch -- not a re-touch of the same arm.
+
+Reason: The systems-architect's corrected framing showed the full run's real value isn't re-confirming already-known facts (speed, truncated-run validity) but producing a genuinely step-matched comparison against full-decoder's own checkpoints, at acceptable timeline risk given the corrected (later) deadline.
+
+Consequences: A declared bailout point was adopted: if step 6900 is not reached by 2026-09-22 00:00 EDT, kill the run and use the last aligned checkpoint reached -- since checkpoints are step-matched to full-decoder's, any bailout point still yields a valid, reportable comparison, not a wasted run. This run's own resume-path safety (create_early_stopping_callback disabled from the start) is now the template for any future resume of this config family, superseding the need to rediscover ISS-015/016's fix under time pressure.
+
+Related Records: [[DEC-012]], [[DEC-011]], [[EXP-015]], [[ISS-015]], [[ISS-016]]
