@@ -748,3 +748,41 @@ Result: PASS — full-decoder LR is monotonic and clearly best at 2e-5 (highest 
 Remaining Risks: (1) The two lowest full-decoder probes (5e-6, 1e-5) only have 500-sample dev WER, not the full 915 — inconsistent evaluation resolution against the 2e-5 winner and the LoRA probes. Does not change the full-decoder LR decision (2e-5 wins on val_loss regardless, by a wide margin), so not re-run. (2) LoRA's 3e-4 vs 5e-4 WER tie means the choice partially rests on val_loss trend rather than a WER-significant difference — if the production LoRA run underperforms, 3e-4 remains a plausible alternative not ruled out by this probe. (3) Neither arm's probe tested LRs beyond its selected value (full-decoder could plausibly benefit from >2e-5, LoRA from >5e-4) — the probe was scoped to 3 points per arm per the original plan, not an exhaustive sweep.
 
 Related Records: [[DEC-011]], [[VAL-023]], [[EXP-014]]
+
+---
+
+## VAL-026 — Decoding-fairness (N-best + in-domain KenLM) on the two matched-protocol arms (full-decoder, LoRA-full)
+
+Date: 2026-09-22
+Status: COMPLETE, PASS
+
+Objective: Extend [[VAL-013]]/[[VAL-014]]'s decoding-fairness comparison (S4-FAIR) -- giving Canary-Qwen the same in-domain KenLM access as the W2V2 baseline via 5-best beam search + rescoring -- to the two matched-protocol production checkpoints ([[EXP-015]]): full-decoder (step=9200) and LoRA-full (step=9200), the fully-exposure-matched pair.
+
+**Bug found and fixed before running anything**: `generate_nbest.py` (the N-best generation script used for VAL-013/014) hardcoded `SALM.from_pretrained('nvidia/canary-qwen-2.5b')` as its base architecture -- correct for v1/v3 (LoRA adapters trained on top of the released checkpoint) but structurally wrong for a non-LoRA full-decoder-FT checkpoint, whose plain `llm.model.layers.*` keys do not match the released model's LoRA-shaped `llm.base_model.model.model.layers.*` keys. Under the script's `strict=False` load, this would have silently discarded most of the trained weights rather than erroring, reproducing the exact class of bug already documented in [[ISS-013]] for `eval_finetuned.py`. Ported both of `eval_finetuned.py`'s ISS-013 fixes into `generate_nbest.py`: (1) `--base composed`/`--exp-config` args that reconstruct the exact training-time architecture with a hard `0` missing/unexpected-key assertion, and (2) passing `do_sample`/`temperature`/`top_k`/`top_p` as direct kwargs to `.generate()` rather than nested inside a `GenerationConfig` object -- the same determinism fix `eval_finetuned.py` needed, since a value equal to `GenerationConfig()`'s own class default gets silently backfilled from the underlying LLM's own `generation_config.json` (Qwen3-1.7B's is `do_sample=True`) when only `--base composed` is used, which this script never was before.
+
+Verification before trusting the fix: smoke-tested on 5 samples for each checkpoint -- `load_state_dict: 0 missing keys, 0 unexpected keys` for both (full-decoder and LoRA-full), genuine per-beam hypothesis diversity confirmed by inspection, and a repeat-run determinism check (identical results byte-for-byte on a second run) for both checkpoints, mirroring the exact verification method used when `eval_finetuned.py`'s determinism bug was originally caught and fixed.
+
+Inputs / Configuration: full-decoder checkpoint (`experiments_matched_full_decoder/checkpoints/step=9200-last.ckpt`) and LoRA-full checkpoint (`experiments_matched_lora_full9200/checkpoints/step=9200-last.ckpt`), full UWB-ATCC test set (2,886 utterances), same `uwb_atcc_4g.binary` KenLM binary as VAL-013/014 (`~/w2v2-air-traffic/experiments/data/uwb_atcc/train/lm/`), same alpha grid ([0.0, 0.1, 0.3, 0.5, 0.7, 1.0], pre-registered headline alpha=0.5 matching pyctcdecode's own default used for the W2V2 baseline -- not tuned on this test set).
+
+Procedure: Full N-best generation (2,886/2,886 samples, 0 errors, both checkpoints) via the fixed `generate_nbest.py --base composed`, run in the `canary_ft` conda env; rescoring via `rescore_kenlm.py`, run in the separate `w2v2_asr` conda env (the one with kenlm Python bindings installed -- `canary_ft` does not have this package).
+
+Actual Result:
+
+| Config | WER |
+|---|---|
+| W2V2 native (no LM) | 14.54% |
+| W2V2 + KenLM | 12.69% |
+| Full-decoder native, greedy (existing, [[EXP-015]]) | 18.73% |
+| Full-decoder native, 5-beam rank-1 | **17.54%** |
+| Full-decoder + KenLM, 5-best rescore, alpha=0.5 (headline) | 18.66% |
+| Full-decoder + KenLM, best alpha=0.1 | 17.67% |
+| LoRA-full native, greedy (existing, [[EXP-015]]) | 19.70% |
+| LoRA-full native, 5-beam rank-1 | **18.67%** |
+| LoRA-full + KenLM, 5-best rescore, alpha=0.5 (headline) | 19.16% |
+| LoRA-full + KenLM, best alpha=0.1 | 18.59% |
+
+Conclusion: Same qualitative pattern as v3 ([[VAL-014]]), not v1 ([[VAL-013]]) -- for both matched-protocol arms, beam search alone gives essentially all of the available improvement (full-decoder: 18.73%->17.54%; LoRA-full: 19.70%->18.67%), and the external in-domain KenLM makes results WORSE at the pre-registered headline alpha=0.5 (both arms), only marginally better than beam-alone at a much smaller alpha=0.1. This is consistent with VAL-014's hypothesis that well-regularized/well-trained checkpoints (both matched-protocol arms use SpecAugment + properly-probed LR + full/near-full training exposure) are already well-calibrated to in-domain phrasing, leaving little room for an external n-gram LM to add value. The W2V2-vs-Canary-Qwen gap (14.54%/12.69% vs ~17.5-19.7%) narrows further than it did for v1/v3 but is not closed by the fairness fix alone in either arm.
+
+Remaining Risks: Same as VAL-013/014 -- alpha was swept but not cross-validated on a held-out split distinct from the test set (headline alpha chosen by the same independent, pre-registered criterion). Does not re-examine whether beam search's own rank-1 selection could itself be a source of the improvement independent of any LM (already the case for v1/v3 too, noted there and not re-litigated here).
+
+Related Records: [[VAL-013]], [[VAL-014]], [[ISS-013]], [[EXP-015]]
