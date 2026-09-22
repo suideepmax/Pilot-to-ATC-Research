@@ -424,10 +424,10 @@ Next Action: Present this tradeoff to the user before launching the matched-prot
 
 Related Records: [[VAL-019]], [[VAL-022]], [[VAL-023]], [[DEC-010]]
 
-## EXP-015 — Matched-protocol production runs: full-decoder complete (9200 steps), LoRA-truncated complete (3700 steps) and evaluated, LoRA-full (9200 steps) running
+## EXP-015 — Matched-protocol production runs: all three arms COMPLETE and evaluated (full-decoder 9200 steps, LoRA-truncated 3700 steps, LoRA-full 9200 steps)
 
-Date: 2026-09-17 to 2026-09-21 (ongoing)
-Status: full-decoder arm COMPLETE + EVALUATED; LoRA-truncated arm COMPLETE + EVALUATED; LoRA-full arm RUNNING
+Date: 2026-09-17 to 2026-09-22
+Status: ALL THREE ARMS COMPLETE, EVALUATED (dev + one-time test touch each)
 
 Objective: Execute DEC-011's decided matched-protocol comparison (full-decoder vs LoRA, identical init/optimizer/data/schedule/regularization, only adaptation scope differing) using the LR values selected in [[VAL-025]] (full-decoder lr=2e-5, LoRA lr=5e-4).
 
@@ -461,8 +461,33 @@ Both arms' final (highest-exposure) checkpoint won on dev WER, despite val_loss 
 
 Full-decoder beats LoRA-truncated by 1.89pp on the held-out test set under fully matched conditions -- the clean, confound-controlled result [[DEC-011]] was designed to produce. Per explicit user decision (2026-09-20), the truncated-LoRA test touch was NOT discarded even though a full-length LoRA run was subsequently also launched (see below) -- both are being kept and reported as separate, distinctly-configured experimental arms, each with its own single test touch, rather than treating the truncated run as superseded.
 
-LoRA-full arm (reversing DEC-012's truncation, see [[DEC-013]]): Launched 2026-09-20 14:14 (`experiments_matched_lora_full9200/`, separate log dir from the truncated run, no collision) with two safeguards added after two-agent pre-launch review: `exp_manager.checkpoint_callback_params.every_n_train_steps=1150` (aligns checkpoints with full-decoder's own 2300/4600/6900/9200 at steps 2300/4600/6900/9200, for a genuinely step-matched learning curve between arms) and `exp_manager.create_early_stopping_callback=false` (proactively avoids the ISS-015/ISS-016 EarlyStopping cross-device crash in case this run ever needs a resume). Status as of 2026-09-21: running cleanly, step 4600/9200 (50%), val_loss 1150=0.595 (best), 2300=0.606, 3450=0.636, 4600=0.638 -- same plateau-after-early-minimum pattern as both other arms. No errors. ETA ~2026-09-22 07:00 EDT per observed ~16s/step rate, well inside the actual ICASSP deadline (2026-09-23 submission, effectively 2026-09-24 08:00 EDT under AoE).
+LoRA-full arm training (reversing DEC-012's truncation, see [[DEC-013]]): Launched 2026-09-20 14:14 (`experiments_matched_lora_full9200/`, separate log dir from the truncated run, no collision) with two safeguards added after two-agent pre-launch review: `exp_manager.checkpoint_callback_params.every_n_train_steps=1150` (aligns checkpoints with full-decoder's own 2300/4600/6900/9200) and `exp_manager.create_early_stopping_callback=false` (proactively avoids the ISS-015/ISS-016 EarlyStopping cross-device crash). Completed cleanly to step 9200 on 2026-09-22 07:11, ~16.3s/step throughout, zero errors, DEC-013's bailout point (step 6900 by 2026-09-22 00:00 EDT) reached comfortably early and never needed. Checkpoints at steps 1150/2300/3450/4600/5750/6900/8050/9200. val_loss trajectory: bottoms at step 1150 (0.595), plateaus/drifts in the 0.58-0.65 band thereafter (final=0.639) -- same pattern as both other arms.
 
-Next Action: Let LoRA-full run to step 9200 (or the DEC-013 bailout point if the deadline forces an early stop); evaluate all its checkpoints on the full dev set; touch test set once for its winner; report all three arms (full-decoder, LoRA-truncated, LoRA-full) in the manuscript with their distinct true-epoch exposures made explicit.
+**LoRA-full dev-set WER (full 915-sample set, all 8 checkpoints):**
+
+| Step | True epochs | Dev WER |
+|---|---|---|
+| 1150 | ~3.47 | 22.07% |
+| 2300 | ~6.93 | 22.10% |
+| 3450 | ~10.40 | 22.29% |
+| 4600 | ~13.86 | 20.42% |
+| 5750 | ~17.33 | 18.96% |
+| 6900 | ~20.79 | 19.48% |
+| 8050 | ~24.26 | 17.90% |
+| **9200** | **27.72** | **17.83% (arm winner)** |
+
+Like both other arms, the final (highest-exposure) checkpoint wins on dev WER despite val_loss having bottomed much earlier (step 1150). Notably, LoRA-full's dev-set winner (17.83%) is BETTER than full-decoder's own dev-set winner (18.19%) -- an early signal (confirmed below on test) that at fully matched 27.72-epoch exposure, the arm-to-arm gap seen in the truncated comparison narrows and may not hold the same direction dev-side.
+
+**FINAL matched-protocol comparison, all three arms, test set (2,886 samples, one touch per arm's dev-selected winner):**
+
+| Arm | Steps | True epochs | Test WER |
+|---|---|---|---|
+| Full-decoder | 9200 | 27.72 | **18.73%** |
+| LoRA-truncated | 3700 | ~11.15 | 20.62% |
+| **LoRA-full** | **9200** | **27.72** | **19.70%** |
+
+At fully matched exposure (both arms 27.72 true epochs, identical init/optimizer/data/regularization/schedule length, only adaptation scope differing), full-decoder still beats LoRA, but the gap narrows from 1.89pp (vs. the truncated LoRA run) to **0.97pp** (vs. LoRA-full) -- the truncated comparison somewhat overstated the full-decoder advantage, since it compared full-decoder at its full exposure against LoRA at less than half that exposure. This 0.97pp gap at matched exposure is the cleanest, most defensible headline number for the manuscript. All three arms are reported (not just full-decoder vs. LoRA-full) since the truncated run is itself informative about the exposure-sample-efficiency question this project has tracked since [[EXP-014]].
+
+Next Action: Write up all three arms in the manuscript with their distinct true-epoch exposures made explicit; report the full 8-checkpoint dev tables for both LoRA arms and full-decoder as supplementary evidence of the non-monotonic/plateau-then-recover WER pattern; disclose the checkpoint-selection-instability finding (full-decoder's 0.68pp non-monotonic spread; LoRA's own checkpoints also non-monotonic, e.g. step 6900's 19.48% is worse than step 8050's 17.90%) as a limitation alongside the headline comparison.
 
 Related Records: [[VAL-025]], [[DEC-011]], [[DEC-012]], [[DEC-013]], [[ISS-016]], [[EXP-014]], [[AUD-006]]
