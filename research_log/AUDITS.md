@@ -164,3 +164,26 @@ Evidence: Direct Python set-intersection check over all four manifest files' `id
 Limitations: Did not check whether `test_cuts.jsonl.gz` itself might share sessions/speakers (not just exact utterance IDs) with `train_cuts.jsonl.gz` or `train_cuts_v2.jsonl.gz` — this audit checked exact-utterance overlap only, per the standing principle (research_log conventions) of keeping duplicate-utterance and speaker/session-overlap questions distinct rather than inferring one from the other. A session-level overlap audit, if needed, would require parsing the `recording`/session-id fields, not yet done here.
 
 Related Records: [[VAL-017]], [[DEC-011]], [[EXP-015]], [[VAL-025]]
+
+## AUD-007 — W2V2's separate Kaldi-format UWB-ATCC split checked directly: no exact-utterance leakage, one session-level overlap (same session already flagged in VAL-017)
+
+Date: 2026-09-22
+Status: COMPLETE
+
+Objective: W2V2 (the model behind reviewer 4Pd7's praised "strongest part of the paper" result) uses a completely separate data pipeline from the Canary-Qwen lhotse cuts audited in [[AUD-006]] -- Kaldi-format `wav.scp`/`segments`/`text` files, not lhotse `CutSet` manifests. Nothing in the repo had verified whether this pipeline's own train/test split has any leakage, exact-utterance or session-level. Given how much weight reviewer feedback placed on this specific result, check directly against the actual data files rather than assume it inherits or avoids AUD-006's finding.
+
+Scope: `/home/kotasthane/w2v2-air-traffic/experiments/data/uwb_atcc/{train,test}/segments` (11,543 train / 2,886 test utterances -- same counts as Canary's original `train_cuts.jsonl.gz`/`test_cuts.jsonl.gz`, consistent with both pipelines being built from the same underlying UWB-ATCC train/test division, just reformatted per-tool). Read-only; no files modified.
+
+Methodology: Loaded both `segments` files directly (`utt-id recording-id start end`, standard Kaldi format) and computed two separate overlaps, per the standing project convention of keeping duplicate-utterance and session/speaker-overlap questions distinct rather than inferring one from the other: (1) exact utterance-ID intersection between train and test; (2) recording-ID (session) intersection between train and test.
+
+Findings:
+1. **Exact-utterance overlap (train ∩ test by full utterance ID) = 0/2886.** No duplicate utterances between W2V2's train and test sets.
+2. **Session-level overlap (train ∩ test by recording ID) = 1 session out of 2,086 train / 570 test recordings**: `uwb-atcc_ACCU-pwnH5N` -- the exact same session already flagged in [[VAL-017]]'s disclosure for the separate lhotse pipeline (there, 9 of this session's cuts were found to appear in both the old `train_cuts.jsonl.gz` and `test_cuts.jsonl.gz`). In W2V2's Kaldi split: 9 segments of this session are in train (covering the 0.78s-42.14s range of the recording), 1 different, non-overlapping segment is in test (45.09s-51.89s). This is almost certainly the same underlying UWB-ATCC corpus data-quality issue surfacing in both independently-built pipelines, not two separate leaks.
+
+Evidence: Direct Python set-intersection over both `segments` files' utterance-ID and recording-ID columns (session script, not saved as a permanent file -- reproducible via the methodology described above).
+
+Conclusion: W2V2's train/test split has no exact-utterance leakage. It does share one session (same recording, disjoint time segments) between train and test, affecting exactly 1 of 2,886 test utterances (0.035% of the test set). The practical effect on W2V2's headline WER is negligible -- a single utterance's correctness can move an aggregate WER computed over 2,886 utterances by only a small fraction of a percentage point, nowhere near sufficient to explain or meaningfully inflate the reported result. This should still be disclosed in the manuscript precisely because it is real and traceable to the same root corpus issue already documented for the other pipeline -- silence here, given reviewer 4Pd7's specific praise for this result, would be a credibility risk disproportionate to the actual (negligible) magnitude of the issue.
+
+Limitations: Did not check ATCOSIM's Kaldi-format splits for the same class of issue (out of scope of this audit, which was specifically about the UWB-ATCC result reviewer 4Pd7 praised). Did not attempt to quantify the exact WER impact of excluding the 1 affected test utterance (would require re-running W2V2 eval with that utterance removed, not done here since the practical impact is judged negligible without needing to spend that compute).
+
+Related Records: [[VAL-017]], [[AUD-006]], [[DEC-002]]

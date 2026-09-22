@@ -9,6 +9,7 @@ Initialized: 2026-09-06. All records below were recovered from existing reposito
 - AUD-004 — Full repo structure/scripts/docs audit + hardware/software efficiency review (script convention split, stale 32.8% instance, SETUP.md gap, stale Phase 4 docs)
 - AUD-005 — Independent fresh-eyes re-audit of Canary-Qwen v1/v2/v3 config rename (DEC-008): rename/fix confirmed correct, but found v1/v3 checkpoint-dir collision + stale REPLICATION_GUIDE.md rm -rf [see ISS-010]
 - AUD-006 — Dev-set/manuscript-train overlap quantified: dev_cuts.jsonl.gz is 100% (915/915) a subset of the ORIGINAL v1/v2/v3 train_cuts.jsonl.gz, but 0% overlap with the corrected train_cuts_v2.jsonl.gz used by this session's new models. Dev is legitimately held-out only relative to the new models, not v1/v2/v3 — any dev-set comparison between old and new models would be unfair to the new ones
+- AUD-007 — W2V2's separate Kaldi-format UWB-ATCC split checked directly (reviewer 4Pd7's praised result): 0 exact-utterance train/test overlap; 1 session-level overlap (uwb-atcc_ACCU-pwnH5N, the same session already flagged in VAL-017 for the other pipeline) affecting 1/2886 test utterances (0.035%) — negligible WER impact but should be disclosed
 
 ## Validation
 - VAL-001 — UWB-ATCC W2V2-large final checkpoint beats paper baseline (14.54%/12.69% vs paper 17.48-17.56%/13.72-14.26%)
