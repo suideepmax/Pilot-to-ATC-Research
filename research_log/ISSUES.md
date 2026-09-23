@@ -370,6 +370,10 @@ Status: OPEN upstream (Lightning's bug itself was not patched), but WORKAROUND V
 
 Related Records: [[ISS-016]]
 
+**UPDATE (2026-09-22) — script-provenance fact, needed for the manuscript's reproducibility section.** `salm_train_stable.py` (the corrected script this fix produced) was created 2026-09-09 (`git log`, commit `3c89bfd`). Every run before that date -- v1/v2/v3 and the fresh v1-equivalent control checkpoint used to verify their reproducibility ([[VAL-010]], run 2026-09-07/08) -- necessarily used the original stock NeMo `salm_train.py`, since the corrected script did not yet exist; there was no possible script-identity confound in those runs, because no alternative script existed at the time. Every run from 2026-09-09 onward (S3-B3, the matched-protocol full-decoder/LoRA arms, this project's LR probes) used `salm_train_stable.py`. The two regularization-decomposition ablations built 2026-09-22 to isolate SpecAugment from LoRA dropout ([[EXP-016]], if/when recorded) deliberately reused the original stock `salm_train.py` (confirmed unmodified since -- md5 `3f523c0391e49c78f9b97564cacce9f4`, file last touched 2026-03-26, predating this entire project) rather than the corrected script, specifically to match the exact conditions that produced the originally-reported v1/v3 numbers being decomposed. This fact should be stated explicitly in the manuscript's methodology/reproducibility section, since the pipeline used genuinely differs across different parts of this work's results, for a documented and defensible reason (a numerical bug fix), not an inconsistency.
+
+Related Records: [[VAL-010]], [[VAL-025]], [[EXP-015]]
+
 ## ISS-016 — Resuming `salm_train_stable.py` from a checkpoint requires three non-obvious overrides; without them, resume crashes on the first post-resume epoch boundary
 
 Date: 2026-09-18
