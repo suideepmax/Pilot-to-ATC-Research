@@ -491,3 +491,30 @@ At fully matched exposure (both arms 27.72 true epochs, identical init/optimizer
 Next Action: Write up all three arms in the manuscript with their distinct true-epoch exposures made explicit; report the full 8-checkpoint dev tables for both LoRA arms and full-decoder as supplementary evidence of the non-monotonic/plateau-then-recover WER pattern; disclose the checkpoint-selection-instability finding (full-decoder's 0.68pp non-monotonic spread; LoRA's own checkpoints also non-monotonic, e.g. step 6900's 19.48% is worse than step 8050's 17.90%) as a limitation alongside the headline comparison.
 
 Related Records: [[VAL-025]], [[DEC-011]], [[DEC-012]], [[DEC-013]], [[ISS-016]], [[EXP-014]], [[AUD-006]]
+
+## EXP-016 — Regularization-decomposition ablations (SpecAugment-only, dropout-only): directional signal only, short-exposure caveat explicit
+
+Date: 2026-09-22 to 2026-09-23
+Status: COMPLETE (as scoped -- a deadline-driven SHORT check, not the full-exposure decomposition originally planned)
+
+Objective: Answer a reviewer question (relayed via a collaborator's email) about v3's three simultaneous changes over v1 (SpecAugment, LoRA dropout 0.01->0.1, weight_decay 1e-3->1e-2): which actually drove v3's 23.32%->20.70% improvement? Weight decay was already ruled out with certainty via direct numerical proof (ISS-011: numerically inert in the plain fp16 AdamW v1/v3 used, regardless of configured value). This experiment targets the remaining open question: SpecAugment vs. LoRA dropout, never previously isolated from each other within the v1/v3 LoRA-scope comparison (only planned in the original research program's Stage 3 roadmap, never executed).
+
+Scope decision (explicit, not hidden): v1/v3's original comparison trained to 10,000 steps (~21h wall-clock per arm, per `train_canary_v1.sh`'s own documented timing). Two full 10,000-step ablations would need ~42h sequential (both need all 4 GPUs), which did not fit the remaining time before the ICASSP 2027 deadline (~24-30h at the time this was scoped). Per explicit user decision, both ablations were deliberately truncated to 500 steps (v1's own first checkpoint/val_check_interval boundary, 5% of the original exposure) -- a SHORT, DIRECTIONAL/SUGGESTIVE signal only, NOT a definitive decomposition at matched exposure. This must be disclosed with this exact caveat wherever cited.
+
+Configuration: Two new configs (`salm_uwb_atcc_v3_specaugment_only.yaml`, `salm_uwb_atcc_v3_dropout_only.yaml`), each an exact minimal diff from `salm_uwb_atcc_v1.yaml` (verified via `diff` before writing), changing ONLY the one variable each is meant to isolate. Both use the exact same stock NeMo `salm_train.py` script v1/v3 actually used (confirmed unmodified since -- md5 `3f523c0391e49c78f9b97564cacce9f4`, file dated 2026-03-26, predating this entire project), not this project's own `salm_train_stable.py`, specifically to avoid introducing a script-identity confound on top of the regularization question (see [[ISS-011]] update for the full script-provenance timeline: `salm_train_stable.py` did not exist until 2026-09-09, so no prior v1/v3-lineage run, including [[VAL-010]]'s Stage-2 control, could have had this confound either).
+
+A third data point (vanilla v1 at step=500, unregularized) was obtained at zero new compute by locating and verifying (via embedded `meta.pt` config, same provenance method as [[VAL-011]]) an existing `step=500.ckpt` from [[VAL-010]]'s Stage-2 v1-equivalent re-run (`/home/kotasthane/canary-ft/experiments/checkpoints/step=500.ckpt`, confirmed genuine: `lora_dropout=0.01`, `weight_decay=0.001`, no `spec_augment`, `global_step=500`) -- this provides the reference point neither new ablation alone could establish.
+
+Actual Result (full 2,886-sample test set, `eval_finetuned.py --base released` default, matching VAL-010's own precedent for v1-lineage checkpoints):
+
+| Config | WER @ step=500 (5% of original exposure) |
+|---|---|
+| Vanilla v1 (no SpecAugment, dropout=0.01) | **39.65%** |
+| SpecAugment-only (dropout=0.01, no dropout change) | **41.41%** (+1.76pp vs. vanilla) |
+| Dropout-only (dropout=0.1, no SpecAugment) | **40.11%** (+0.46pp vs. vanilla) |
+
+Conclusion: At this short exposure, BOTH regularization components individually make WER *worse* than the unregularized baseline, with SpecAugment costing more (+1.76pp) than dropout (+0.46pp). This is consistent with the well-documented cost-then-benefit profile of regularization techniques (SpecAugment in particular masks input, making the training task locally harder, with generalization benefit typically emerging only over much longer training) -- it does NOT mean either component is harmful to v3's actual 20.70% result at the full 10,000-step exposure; it means a 500-step check cannot see that benefit yet, exactly as anticipated when this scope was chosen. No conclusion should be drawn about which component (SpecAugment or dropout) drove v3's ACTUAL improvement from this data alone -- the question remains genuinely open at matched (10,000-step) exposure.
+
+Remaining Risks / Limitations: This experiment answers a narrower question than the one asked ("which drove v3's improvement" remains unanswered at matched exposure) and should not be over-interpreted. A full 10,000-step version of both ablations (~42h total) would give a definitive answer but was not run under the deadline constraint -- flagged as a concrete, well-defined follow-up for future work, not a dropped question. Single seed (1234) for all three data points, consistent with this project's existing single-seed limitation.
+
+Related Records: [[ISS-011]], [[VAL-010]], [[VAL-011]], [[VAL-025]], [[EXP-004]]
