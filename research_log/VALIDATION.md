@@ -786,3 +786,29 @@ Conclusion: Same qualitative pattern as v3 ([[VAL-014]]), not v1 ([[VAL-013]]) -
 Remaining Risks: Same as VAL-013/014 -- alpha was swept but not cross-validated on a held-out split distinct from the test set (headline alpha chosen by the same independent, pre-registered criterion). Does not re-examine whether beam search's own rank-1 selection could itself be a source of the improvement independent of any LM (already the case for v1/v3 too, noted there and not re-litigated here).
 
 Related Records: [[VAL-013]], [[VAL-014]], [[ISS-013]], [[EXP-015]]
+
+---
+
+## VAL-027 — Checked whether a closed-form (eigenvalue/trace-based) learning-rate bound applies to this project's optimizer; it does not, and here is the actual computed comparison
+
+Date: 2026-09-22
+Status: COMPLETE, NEGATIVE RESULT (the technique does not transfer; recorded for completeness and to close out an external question, not because it changed any decision)
+
+Objective: An external question (from a paper on STAP/fMRI signal processing shared by a collaborator, JMRI Feb 2006, which derives an optimal steepest-descent step size from the trace of a noise covariance matrix -- tr(R) as a cheap upper bound on the largest eigenvalue lambda_max, giving the stability bound `0 < mu < 2/lambda_max`) asked whether an analogous closed-form approach could have been used to select this project's training learning rates, instead of the empirical LR probes actually used ([[VAL-025]]). Check this directly with real numbers from this project's own completed runs, rather than answer by analogy alone.
+
+Methodology: For a single gradient vector g, trace(g g^T) = ||g||^2 (the outer product is rank-1, its only nonzero eigenvalue is ||g||^2). Averaging ||g||^2 over many training steps therefore estimates trace(E[gg^T]), the empirical-Fisher/gradient-covariance trace -- the same quantity the source paper's trick is built on, computed from data this project already had (the `grad_norm_unscaled` value logged at every optimizer step by `salm_train_stable.py`, read directly from the full-decoder and LoRA-truncated production run logs, no new GPU compute). From this trace estimate, computed the steepest-descent stability bound `mu_bound = 2 / trace_estimate` and compared it against the actual VAL-025-selected learning rate for each arm.
+
+Actual Result (recomputed and double-checked before recording -- an initial verbal report of this result in conversation stated the full-decoder ratio incorrectly as ~143x; the correct, verified figure is ~2671x, corrected here):
+
+| Arm | n_steps (logged) | mean grad_norm | mean(‖g‖²) [trace(R) proxy] | Steepest-descent bound (2/trace) | Actual probe-selected LR | Bound is how many x larger than the actual LR |
+|---|---|---|---|---|---|---|
+| Full-decoder | 5,521 | 4.6717 | 37.4342 | 5.343 x 10⁻² | 2 x 10⁻⁵ | **2,671x** |
+| LoRA-truncated | 3,700 | 0.9382 | 0.9763 | 2.049 | 5 x 10⁻⁴ | **4,097x** |
+
+Conclusion: The closed-form bound does **not** usefully validate or invalidate this project's empirically-probed learning rates, and the enormous gap between the two is expected, not informative, for two structural reasons: (1) the source paper's bound governs raw steepest descent, where the update is literally `mu * g`; this project's optimizer (`MasterWeightAdamW`, an Adam variant) instead divides each parameter's gradient by a running per-parameter estimate of its own squared-gradient magnitude before applying the learning rate, so the *effective* per-parameter step size is closer to the learning rate itself, not the learning rate times the raw gradient norm -- the two quantities are not in comparable units; (2) the source paper's setting is a fixed quadratic cost (solving a linear system via steepest descent) with one genuine, unchanging noise covariance matrix, whereas this project's loss surface is a non-convex ~2.7B-parameter neural network with no single fixed matrix whose eigenvalues would bound convergence globally the way they do there.
+
+The actual deep-learning technique that is a closer analog to the source paper's spirit (replacing discrete-candidate comparison with a single measured curve) is the learning-rate range test (Smith, 2015/2017): one short training run sweeping the LR upward while logging loss, reading the good LR directly off the resulting loss-vs-LR curve, rather than the discrete 3-point probes actually used in [[VAL-025]]. This was not implemented or run this session (identified as a follow-up, not executed).
+
+Remaining Risks / Limitations: This check used only the two runs whose full per-step gradient-norm logs were still available in this session's scratchpad; the LoRA-full arm's gradient-norm log was not included (not re-derived, since the qualitative conclusion -- the bound doesn't transfer to Adam-family optimizers regardless of the specific arm -- does not depend on which arm's numbers are used). The initial verbal report of the full-decoder ratio in conversation was wrong by roughly 19x (stated ~143x, actual ~2671x) before this record corrected it via a from-scratch recomputation -- flagged here explicitly as an example of why a number should be recomputed and verified before being written to a permanent record, not merely repeated from an earlier statement in the same conversation.
+
+Related Records: [[VAL-025]], [[EXP-015]]
