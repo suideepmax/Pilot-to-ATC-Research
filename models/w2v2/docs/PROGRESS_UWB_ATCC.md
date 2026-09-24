@@ -159,7 +159,7 @@ Note: 15.07% is greedy decoding during training. Beam search eval gives 14.54% (
 | 9000 | 15.05% | 0.0760 |
 | 10000 | 15.07% | 0.0606 |
 
-Model crosses paper's 17.48% WER baseline at approximately step 2,500.
+Model crosses the UWB-ATCC-only released model's 17.56% WER baseline at approximately step 2,500 (see correction note below the results table: this baseline was previously mislabeled as "paper's 17.48%," which is actually a different, jointly-trained model's result).
 
 ## Phase 5 - KenLM Language Model + Final Evaluation [DONE]
 ### KenLM Training
@@ -185,16 +185,16 @@ bash models/w2v2/scripts/eval_large_model.sh
 ```
 
 ### Final Results vs Paper
-| Metric | Paper (Table 3) | Paper (HuggingFace card) | **Our Result** |
-|--------|----------------|--------------------------|----------------|
+| Metric | Joint UWB-ATCC+ATCOSIM model (HuggingFace card) | UWB-ATCC-only model (HuggingFace card) | **Our Result** |
+|--------|--------------------------------------------------|------------------------------------------|----------------|
 | WER no LM (greedy) | 17.48% | 17.56% | **14.54%** |
 | WER with CTC+KenLM | 14.26% | 13.72% | **12.69%** |
 
-We beat the paper on both metrics. The no-LM result is greedy (argmax) CTC decoding — eval_model.py uses greedy when no LM is provided.
+We beat both released models on both metrics. The no-LM result is greedy (argmax) CTC decoding — eval_model.py uses greedy when no LM is provided.
 
 Note: a second standalone eval of the same checkpoint yielded 14.60% / 12.82% (minor run-to-run variation); the canonical stored result in `finetuned_results_v2.json` is 14.54% / 12.69%.
 
-Note: slight discrepancy between Table 3 (17.48%) and HuggingFace model card (17.56%) — likely different text normalization at eval time.
+Correction: the 17.48%/14.26% figures were previously mislabeled as "Paper (Table 3)." They are not from the paper's Table 3 — they are the UWB-ATCC test results of a *different* released model (`Jzuluaga/wav2vec2-large-960h-lv60-self-en-atc-uwb-atcc-and-atcosim`), trained jointly on UWB-ATCC and ATCOSIM rather than UWB-ATCC alone. The 17.56%/13.72% figures (from the `...-en-atc-uwb-atcc` model card, UWB-ATCC-only) remain the correct primary comparison point for this experiment.
 
 ---
 
@@ -223,8 +223,8 @@ Note: the model card shows only `train_batch_size: 24` with no `gradient_accumul
 | 1500 | 3.18 | 0.7842 | 0.2732 | 78.34% |
 | 2500 | 5.31 | 0.6527 | 0.2042 | 60.84% |
 | 5000 | 10.62 | 0.6605 | 0.1853 | 45.66% |
-| 10000 | 21.23 | 0.7287 | 0.1756 | **29.81%** |
+| 10000 | 21.23 | 0.2981 | 0.7287 | **17.56%** |
 
-Paper's training-time greedy WER at step 10,000: 29.81%. Their final eval used beam search decoding, bringing it to 17.56% (no LM) and 13.72% (with LM). Our training-time greedy WER was ~15.07%; standalone greedy eval on the final checkpoint gave 14.54% — a much smaller gap between training and eval, suggesting our model produces cleaner logits that need less decoding correction.
+Correction: this row was previously misaligned by one column — 0.2981 (train loss) had been read as a WER and reported as "29.81%," with the actual eval loss (0.7287) and eval WER (0.1756 = 17.56%) shifted one column to the left of their correct headers. Corrected values per the model card's training log: train loss 0.2981, eval loss 0.7287, eval WER (greedy) 17.56% at step 10,000 — consistent with the 17.56% figure already cited elsewhere in this document (Final Results vs Paper table above) as the UWB-ATCC-only model's card-reported no-LM WER. Our own training-time greedy WER was ~15.07%; standalone greedy eval on the final checkpoint gave 14.54% — a modest ~2.5-point gap versus the model card's own 17.56%, in the same direction as our final result.
 
 **Key observation:** We used a 5× higher learning rate (5e-4 vs 1e-4) and achieved lower WER. The higher LR combined with DDP and larger gradient accumulation appears to have resulted in better optimization for this corpus.

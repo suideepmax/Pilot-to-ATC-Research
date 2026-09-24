@@ -46,12 +46,14 @@ Both use 80/20 train/test split (seed=1234), Kaldi format (wav.scp, text, utt2sp
 
 ### Final results vs paper (Phase 5 — standalone eval)
 
-| Metric | Paper (Table 3) | Paper (HuggingFace) | **Our Result** |
-|--------|----------------|---------------------|----------------|
+| Metric | Joint UWB-ATCC+ATCOSIM model (HuggingFace card) | UWB-ATCC-only model (HuggingFace card) | **Our Result** |
+|--------|--------------------------------------------------|------------------------------------------|----------------|
 | WER no LM (greedy) | 17.48% | 17.56% | **14.54%** |
 | WER with CTC+KenLM | 14.26% | 13.72% | **12.69%** |
 
-**We beat the paper on both metrics.**
+**We beat both released models on both metrics.**
+
+Correction: the 17.48%/14.26% figures were previously mislabeled as "Paper (Table 3)." They are not from the paper's Table 3 — they are the UWB-ATCC test results of a *different* released model (`Jzuluaga/wav2vec2-large-960h-lv60-self-en-atc-uwb-atcc-and-atcosim`), trained jointly on UWB-ATCC and ATCOSIM rather than UWB-ATCC alone. The 17.56%/13.72% figures (from the `...-en-atc-uwb-atcc` model card, UWB-ATCC-only) remain the correct primary comparison point.
 
 ### Learning curve (large model, Run 3)
 
@@ -63,11 +65,11 @@ Both use 80/20 train/test split (seed=1234), Kaldi format (wav.scp, text, utt2sp
 | 5,000 | 16.39% | 0.2305 |
 | 10,000 | 15.07% | 0.0606 |
 
-Model crosses the paper's 17.48% WER at approximately step 2,500.
+Model crosses the UWB-ATCC-only released model's 17.56% WER at approximately step 2,500 (previously mislabeled as "the paper's 17.48%," which is actually the different, jointly-trained model's result — see correction note above).
 
 ### Why we beat the paper
 
-The paper used LR=1e-4; we used 5e-4 (5× higher). Combined with DDP and a larger effective gradient accumulation, this led to better convergence on the UWB-ATCC corpus. The paper's training-time greedy WER at step 10k was 29.81% — far higher than our 15.07% — indicating their model's logits were noisier, requiring heavy beam search correction to reach 17.56%.
+The paper used LR=1e-4; we used 5e-4 (5× higher). Combined with DDP and a larger effective gradient accumulation, this led to better convergence on the UWB-ATCC corpus. Note: an earlier version of this document stated "the paper's training-time greedy WER at step 10k was 29.81%" — this was a units/column error (0.2981, the model card's *train loss* at step 10,000, misread as a WER). The model card's actual eval WER at step 10,000 is 17.56% (matching the final result above), and its actual eval loss at that step is 0.7287. Our own training-time greedy WER at step 10k was ~15.07%, a modest gap versus the model card's 17.56%, in the same direction as our final result.
 
 ---
 

@@ -21,6 +21,8 @@ Result: PASS — beats paper on both no-LM and with-LM metrics, across both stan
 
 Remaining Risks: Run-to-run variation of ~0.06-0.13pp observed between two standalone evals of the same checkpoint; source of variation (nondeterminism in decoding/data loading) not further investigated in-repo.
 
+**CORRECTION (2026-09-23, verified against primary sources -- the HuggingFace model cards directly, the Idiap training scripts, and the paper itself):** the "paper's Table 3 numbers (17.48% no-LM / 14.26% with LM)" cited above are NOT from the paper's Table 3. They are the UWB-ATCC test results of a different released model (`Jzuluaga/wav2vec2-large-960h-lv60-self-en-atc-uwb-atcc-and-atcosim`), trained jointly on UWB-ATCC and ATCOSIM rather than UWB-ATCC alone. The comparison and PASS verdict above are unaffected (our 14.54%/12.69% still beats both this figure and the correctly-attributed HuggingFace card numbers, 17.56%/13.72%, for the UWB-ATCC-only model `Jzuluaga/wav2vec2-large-960h-lv60-self-en-atc-uwb-atcc`) -- only the source attribution was wrong, not the underlying result. Also corrected in `SUMMARY.md` and `models/w2v2/docs/PROGRESS_UWB_ATCC.md`, which carried the same misattribution plus a separate column-shift error (a training-loss value at step 10,000, 0.2981, had been misread as a 29.81% WER in the model card's own training-curve table reproduced in those two documents -- the model card's actual step-10,000 eval WER is 17.56%, matching the correctly-attributed figure above).
+
 Related Records: [[EXP-001]], [[DEC-002]]
 
 ---
